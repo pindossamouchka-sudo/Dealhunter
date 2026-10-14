@@ -1,3 +1,4 @@
+import aiosqlite
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
