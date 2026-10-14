@@ -2,6 +2,6 @@ fastapi
 uvicorn
 aiogram
 httpx
-aiosqlite
 pydantic
 beautifulsoup4
+asyncpg
