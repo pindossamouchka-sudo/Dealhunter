@@ -1,6 +1,7 @@
-fastapi==0.115.0
-uvicorn==0.31.0
-aiogram==3.13.1
-httpx==0.27.2
-aiosqlite==0.20.0
-pydantic==2.9.2
+fastapi
+uvicorn
+aiogram
+httpx
+aiosqlite
+pydantic
+beautifulsoup4
