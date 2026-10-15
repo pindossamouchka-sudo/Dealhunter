@@ -24,20 +24,22 @@ from aiogram.types import (
 )
 
 # =====================================================================
-# 1. КОНФИГУРАЦИЯ И СЕТЬ
+# 1. КОНФИГУРАЦИЯ
 # =====================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
-ENV_BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
 PORT = int(os.getenv("PORT", 10000))
+
+# Твой реальный бот
+BOT_USERNAME_DEFAULT = "DealHunterAvito_bot"
+BOT_USERNAME_CACHE = os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lstrip("@") or BOT_USERNAME_DEFAULT
 
 STARS_PRICE = 350
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
-BOT_USERNAME_CACHE = ENV_BOT_USERNAME or "DealHunterBot"
 
-app = FastAPI(title="DealHunter PRO v3.1")
+app = FastAPI(title="DealHunter PRO v3.2")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,7 +52,7 @@ bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 
 # =====================================================================
-# 2. НАДЕЖНАЯ БАЗА ДАННЫХ (PostgreSQL / SQLite с вечными рефералами)
+# 2. БАЗА ДАННЫХ (PostgreSQL Cloud / локальный SQLite)
 # =====================================================================
 pg_pool = None
 sqlite_conn = None
@@ -339,7 +341,7 @@ async def db_get_monitors(uid: int) -> List[Dict[str, Any]]:
 
 
 # =====================================================================
-# 3. НАСТОЯЩИЕ КАРТОЧКИ И ПРЯМОЙ ПАРСИНГ WB API (ПРЯМЫЕ ССЫЛКИ)
+# 3. НАСТОЯЩИЕ КАРТОЧКИ И ПРЯМОЙ ПАРСИНГ WB API
 # =====================================================================
 EXTERNAL_LOTS_BUFFER: List[Dict[str, Any]] = []
 
@@ -723,7 +725,7 @@ async def monitor_scanner_loop():
 
 
 # =====================================================================
-# 5. TELEGRAM BOT + ОПРЕДЕЛЕНИЕ СВОЕГО ЮЗЕРНЕЙМА + ПЛАТЕЖИ
+# 5. TELEGRAM BOT
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
@@ -942,7 +944,7 @@ async def api_push_external_lots(request: Request, x_worker_secret: Optional[str
 
 
 # =====================================================================
-# 7. ИНТЕРФЕЙС (LIQUID GLASS, ДИНАМИЧЕСКИЙ РЕФЕРАЛ, ПОИСК, СВАЙП)
+# 7. ИНТЕРФЕЙС LIQUID GLASS
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
@@ -1078,7 +1080,7 @@ async def serve_ui():
         savedIds: [],
         refCount: 0,
         refDaysEarned: 0,
-        refLink: `https://t.me/DealHunterBot?start=ref_${CURRENT_UID}`
+        refLink: `https://t.me/DealHunterAvito_bot?start=ref_${CURRENT_UID}`
       },
       listings: [],
       monitors: []
@@ -1124,7 +1126,7 @@ async def serve_ui():
       }
     }, 1000);
 
-    // СВАЙП ВНИЗ ДЛЯ ОБНОВЛЕНИЯ (PULL-TO-REFRESH)
+    // Pull-to-refresh
     let touchStartY = 0;
     let pullDist = 0;
     window.addEventListener('touchstart', (e) => {
@@ -1178,7 +1180,6 @@ async def serve_ui():
         const data = await res.json();
         state.user = data.user;
         
-        // Исправление реферальной ссылки: берем актуальный юзернейм от сервера
         if (data.user.refLink) {
           state.user.refLink = data.user.refLink;
         } else if (data.user.botUsername) {
