@@ -5,7 +5,7 @@ import sqlite3
 import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, unquote, parse_qsl
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import FastAPI, Request, Header, HTTPException
@@ -39,7 +39,7 @@ BOT_USERNAME_CACHE = os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lst
 STARS_PRICE = 350
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
 
-app = FastAPI(title="DealHunter PRO v3.3 Webhook")
+app = FastAPI(title="DealHunter PRO v4.0 Bulletproof")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,7 +52,7 @@ bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 
 # =====================================================================
-# 2. БАЗА ДАННЫХ (PostgreSQL Cloud / локальный SQLite)
+# 2. НАДЕЖНАЯ БАЗА ДАННЫХ (PostgreSQL Cloud / локальный SQLite)
 # =====================================================================
 pg_pool = None
 sqlite_conn = None
@@ -65,80 +65,85 @@ def now_utc() -> datetime:
 async def init_db():
     global pg_pool, sqlite_conn
     if DATABASE_URL.startswith("postgres"):
-        import asyncpg
-        pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, command_timeout=15)
-        async with pg_pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS dh_users (
-                    user_id BIGINT PRIMARY KEY,
-                    first_name TEXT DEFAULT 'Охотник',
-                    username TEXT DEFAULT '',
-                    trial_claimed BOOLEAN DEFAULT FALSE,
-                    sub_until TIMESTAMPTZ,
-                    saved_ids TEXT DEFAULT '[]',
-                    referred_by BIGINT DEFAULT NULL,
-                    ref_count INT DEFAULT 0,
-                    ref_days_earned INT DEFAULT 0,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                CREATE TABLE IF NOT EXISTS dh_monitors (
-                    id TEXT PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    title TEXT NOT NULL,
-                    city TEXT DEFAULT 'Москва',
-                    source TEXT DEFAULT 'all',
-                    min_margin INT DEFAULT 15,
-                    active BOOLEAN DEFAULT TRUE,
-                    found_today INT DEFAULT 0,
-                    last_notified_lot TEXT DEFAULT '',
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-            """)
-            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
-            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
-            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0;")
-    else:
-        sqlite_conn = sqlite3.connect("dealhunter.db", check_same_thread=False)
-        sqlite_conn.row_factory = sqlite3.Row
-        cur = sqlite_conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS dh_users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT DEFAULT 'Охотник',
-                username TEXT DEFAULT '',
-                trial_claimed INTEGER DEFAULT 0,
-                sub_until TEXT,
-                saved_ids TEXT DEFAULT '[]',
-                referred_by INTEGER DEFAULT NULL,
-                ref_count INTEGER DEFAULT 0,
-                ref_days_earned INTEGER DEFAULT 0,
-                created_at TEXT
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS dh_monitors (
-                id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                city TEXT DEFAULT 'Москва',
-                source TEXT DEFAULT 'all',
-                min_margin INTEGER DEFAULT 15,
-                active INTEGER DEFAULT 1,
-                found_today INTEGER DEFAULT 0,
-                last_notified_lot TEXT DEFAULT '',
-                created_at TEXT
-            )
-        """)
-        for col_sql in [
-            "ALTER TABLE dh_users ADD COLUMN referred_by INTEGER DEFAULT NULL",
-            "ALTER TABLE dh_users ADD COLUMN ref_count INTEGER DEFAULT 0",
-            "ALTER TABLE dh_users ADD COLUMN ref_days_earned INTEGER DEFAULT 0",
-        ]:
-            try:
-                cur.execute(col_sql)
-            except Exception:
-                pass
-        sqlite_conn.commit()
+        try:
+            import asyncpg
+            pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, command_timeout=15)
+            async with pg_pool.acquire() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS dh_users (
+                        user_id BIGINT PRIMARY KEY,
+                        first_name TEXT DEFAULT 'Охотник',
+                        username TEXT DEFAULT '',
+                        trial_claimed BOOLEAN DEFAULT FALSE,
+                        sub_until TIMESTAMPTZ,
+                        saved_ids TEXT DEFAULT '[]',
+                        referred_by BIGINT DEFAULT NULL,
+                        ref_count INT DEFAULT 0,
+                        ref_days_earned INT DEFAULT 0,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE TABLE IF NOT EXISTS dh_monitors (
+                        id TEXT PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        title TEXT NOT NULL,
+                        city TEXT DEFAULT 'Москва',
+                        source TEXT DEFAULT 'all',
+                        min_margin INT DEFAULT 15,
+                        active BOOLEAN DEFAULT TRUE,
+                        found_today INT DEFAULT 0,
+                        last_notified_lot TEXT DEFAULT '',
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
+                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
+                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0;")
+                return
+        except Exception as e:
+            print(f"[DB Warning] Ошибка PostgreSQL, переключаюсь на SQLite: {e}")
+            pg_pool = None
+
+    sqlite_conn = sqlite3.connect("dealhunter.db", check_same_thread=False)
+    sqlite_conn.row_factory = sqlite3.Row
+    cur = sqlite_conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dh_users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT DEFAULT 'Охотник',
+            username TEXT DEFAULT '',
+            trial_claimed INTEGER DEFAULT 0,
+            sub_until TEXT,
+            saved_ids TEXT DEFAULT '[]',
+            referred_by INTEGER DEFAULT NULL,
+            ref_count INTEGER DEFAULT 0,
+            ref_days_earned INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dh_monitors (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            city TEXT DEFAULT 'Москва',
+            source TEXT DEFAULT 'all',
+            min_margin INTEGER DEFAULT 15,
+            active INTEGER DEFAULT 1,
+            found_today INTEGER DEFAULT 0,
+            last_notified_lot TEXT DEFAULT '',
+            created_at TEXT
+        )
+    """)
+    for col_sql in [
+        "ALTER TABLE dh_users ADD COLUMN referred_by INTEGER DEFAULT NULL",
+        "ALTER TABLE dh_users ADD COLUMN ref_count INTEGER DEFAULT 0",
+        "ALTER TABLE dh_users ADD COLUMN ref_days_earned INTEGER DEFAULT 0",
+    ]:
+        try:
+            cur.execute(col_sql)
+        except Exception:
+            pass
+    sqlite_conn.commit()
 
 
 async def get_or_create_user(
@@ -150,17 +155,21 @@ async def get_or_create_user(
     global BOT_USERNAME_CACHE
     now = now_utc()
     should_reward_ref = False
-    just_granted_trial = False
 
-    valid_ref = referrer_id if (referrer_id and int(referrer_id) != int(uid)) else None
+    valid_ref = None
+    if referrer_id is not None:
+        try:
+            r_int = int(referrer_id)
+            if r_int != int(uid) and r_int > 0:
+                valid_ref = r_int
+        except Exception:
+            pass
 
     if pg_pool:
         async with pg_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
             if not row:
-                # Новый пользователь: сразу выдаем 3 дня PRO, чтобы триал никогда не терялся!
                 initial_sub = now + timedelta(days=3)
-                just_granted_trial = True
                 if valid_ref:
                     should_reward_ref = True
                 await conn.execute(
@@ -171,17 +180,11 @@ async def get_or_create_user(
                 )
                 row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
             else:
-                # Если пользователь уже есть в БД, но ещё не получал 3 дня (sub_until IS NULL и trial_claimed = FALSE)
-                if not row["trial_claimed"] and row["sub_until"] is None:
+                if row["sub_until"] is None and not row["trial_claimed"]:
                     initial_sub = now + timedelta(days=3)
-                    just_granted_trial = True
-                    await conn.execute(
-                        "UPDATE dh_users SET sub_until = $2 WHERE user_id = $1",
-                        uid, initial_sub
-                    )
+                    await conn.execute("UPDATE dh_users SET sub_until = $2 WHERE user_id = $1", uid, initial_sub)
                     row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
 
-                # Если друг уже заходил раньше без рефки, а теперь перешел по твоей реф-ссылке — засчитываем!
                 if valid_ref and row["referred_by"] is None:
                     await conn.execute(
                         "UPDATE dh_users SET referred_by = $2 WHERE user_id = $1 AND referred_by IS NULL",
@@ -202,7 +205,6 @@ async def get_or_create_user(
         row = cur.fetchone()
         if not row:
             initial_sub = now + timedelta(days=3)
-            just_granted_trial = True
             if valid_ref:
                 should_reward_ref = True
             cur.execute(
@@ -215,13 +217,9 @@ async def get_or_create_user(
             cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
             row = cur.fetchone()
         else:
-            if not row["trial_claimed"] and not row["sub_until"]:
+            if not row["sub_until"] and not row["trial_claimed"]:
                 initial_sub = now + timedelta(days=3)
-                just_granted_trial = True
-                cur.execute(
-                    "UPDATE dh_users SET sub_until = ? WHERE user_id = ?",
-                    (initial_sub.isoformat(), uid)
-                )
+                cur.execute("UPDATE dh_users SET sub_until = ? WHERE user_id = ?", (initial_sub.isoformat(), uid))
                 sqlite_conn.commit()
                 cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
                 row = cur.fetchone()
@@ -253,7 +251,6 @@ async def get_or_create_user(
         "user_id": uid,
         "name": fname,
         "trialClaimed": trial_claimed,
-        "justGrantedTrial": just_granted_trial,
         "subActive": is_active,
         "subUntil": sub_until.isoformat() if sub_until else None,
         "secondsLeft": seconds_left,
@@ -266,7 +263,6 @@ async def get_or_create_user(
 
 
 async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
-    """Начисляет +2 дня PRO пригласившему и +1 бонусный день другу."""
     bonus_days = 2
     ref_user = await get_or_create_user(referrer_id)
     now = now_utc()
@@ -301,16 +297,15 @@ async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
             await bot.send_message(
                 referrer_id,
                 f"🎉 <b>Новый реферал: {new_user_name}!</b>\n\n"
-                f"✅ Друг перешёл по вашей ссылке.\n"
-                f"🎁 Вам начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
+                f"✅ Друг перешёл по вашей реферальной ссылке.\n"
+                f"🎁 Вам автоматически начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Ref Notify Error] {e}")
 
 
 async def activate_trial_db(uid: int) -> Dict[str, Any]:
-    """Подтверждает получение 3 дней PRO при нажатии кнопки в приветственном окне."""
     user = await get_or_create_user(uid)
     now = now_utc()
     cur_end = datetime.fromisoformat(user["subUntil"]) if user["subUntil"] else None
@@ -395,7 +390,7 @@ async def db_get_monitors(uid: int) -> List[Dict[str, Any]]:
 
 
 # =====================================================================
-# 3. НАСТОЯЩИЕ КАРТОЧКИ И ПРЯМОЙ ПАРСИНГ WB API
+# 3. КАТАЛОГ ПРЯМЫХ КАРТОЧЕК И ЖИВОЙ ПАРСЕР WB
 # =====================================================================
 EXTERNAL_LOTS_BUFFER: List[Dict[str, Any]] = []
 
@@ -551,12 +546,10 @@ async def fetch_wb_live(query_text: str = "iPhone 15 Pro") -> List[Dict[str, Any
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Accept": "*/*",
-        "Origin": "https://www.wildberries.ru",
-        "Referer": "https://www.wildberries.ru/",
     }
 
     products = []
-    async with httpx.AsyncClient(timeout=4.5) as client:
+    async with httpx.AsyncClient(timeout=3.2) as client:
         for ep in endpoints:
             try:
                 res = await client.get(ep, headers=headers)
@@ -696,10 +689,10 @@ async def build_combined_feed(
 
 
 # =====================================================================
-# 4. ФОНОВЫЙ СКАНЕР МОНИТОРОВ И ПУШ-УВЕДОМЛЕНИЙ
+# 4. ФОНОВЫЙ СКАНЕР МОНИТОРОВ И НЕУБИВАЕМЫЙ ЦИКЛ БОТА
 # =====================================================================
 async def monitor_scanner_loop():
-    await asyncio.sleep(10)
+    await asyncio.sleep(12)
     while True:
         try:
             if not bot:
@@ -777,8 +770,26 @@ async def monitor_scanner_loop():
         await asyncio.sleep(60)
 
 
+async def resilient_bot_polling_loop():
+    """Бесконечный самовосстанавливающийся цикл работы бота: если при деплое возникает конфликт, он сам переподключается через 5 секунд!"""
+    global BOT_USERNAME_CACHE
+    if not bot:
+        return
+    while True:
+        try:
+            me = await bot.get_me()
+            if me and me.username:
+                BOT_USERNAME_CACHE = me.username
+                print(f"[DealHunter Bot] Активен: @{BOT_USERNAME_CACHE}")
+            await bot.delete_webhook(drop_pending_updates=False)
+            await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+        except Exception as e:
+            print(f"[DealHunter Bot] Переподключение поллинга через 5 сек ({e})...")
+            await asyncio.sleep(5)
+
+
 # =====================================================================
-# 5. TELEGRAM BOT ЧЕРЕЗ WEBHOOK (НИКОГДА НЕ ПАДАЕТ НА RENDER!)
+# 5. ОБРАБОТЧИКИ КОМАНД БОТА (/start + рефералы + оплата)
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
@@ -790,12 +801,12 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
     args = command.args if command else None
     if not args and message.text and " " in message.text:
         args = message.text.split(" ", 1)[1].strip()
-    if args and args.startswith("ref_"):
-        ref_raw = args.replace("ref_", "").strip()
-        if ref_raw.isdigit() and int(ref_raw) != uid:
-            referrer_id = int(ref_raw)
+    if args:
+        clean_arg = args.replace("ref_", "").strip()
+        if clean_arg.isdigit() and int(clean_arg) != uid:
+            referrer_id = int(clean_arg)
 
-    user = await get_or_create_user(uid, fname, uname, referrer_id=referrer_id)
+    await get_or_create_user(uid, fname, uname, referrer_id=referrer_id)
 
     sep = "&" if "?" in WEBAPP_URL else "?"
     app_url = f"{WEBAPP_URL}{sep}uid={uid}"
@@ -804,15 +815,16 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Запустить DealHunter PRO", web_app=WebAppInfo(url=app_url))],
+            [InlineKeyboardButton(text="⚡ Открыть Радар DealHunter", web_app=WebAppInfo(url=app_url))],
             [InlineKeyboardButton(text="⭐️ Купить Stars со скидкой", url=BUNNY_STARS_URL)],
         ]
     )
     await message.answer(
-        f"👋 <b>Привет, {fname}!</b>\n\n"
-        "<b>DealHunter PRO</b> — радар выгодных товаров <b>Wildberries, Ozon и Avito</b> с прямыми ссылками на карточки.\n\n"
-        "🎁 Вам уже доступно <b>3 дня PRO-подписки бесплатно</b> — нажмите кнопку ниже, чтобы открыть радар!\n"
-        "👥 Приглашайте друзей во вкладке «Профиль» и получайте <b>+2 дня PRO</b> за каждого друга!",
+        f"👋 <b>Добро пожаловать в DealHunter PRO, {fname}!</b>\n\n"
+        "🔥 Наш радар в реальном времени находит выгодные товары на <b>Wildberries, Ozon и Avito</b> с прямыми ссылками на карточки.\n\n"
+        "🎁 <b>Вам активировано 3 дня PRO-подписки бесплатно!</b>\n"
+        "👥 Приглашайте друзей во вкладке «Профиль» и получайте <b>+2 дня PRO</b> за каждого друга.\n\n"
+        "👇 Нажмите кнопку ниже, чтобы запустить приложение:",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -835,103 +847,31 @@ async def on_successful_payment(message: types.Message):
     )
 
 
-@app.post("/telegram-webhook")
-async def telegram_webhook_endpoint(request: Request):
-    """Принимает сообщения от Telegram мгновенно и без конфликта поллинга."""
-    if not bot:
-        return JSONResponse({"ok": False})
-    try:
-        data = await request.json()
-        update = types.Update.model_validate(data, context={"bot": bot})
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        print(f"[Webhook Error] {e}")
-    return JSONResponse({"ok": True})
-
-
 @app.on_event("startup")
 async def on_startup():
-    global BOT_USERNAME_CACHE
     await init_db()
-    if bot:
-        try:
-            me = await bot.get_me()
-            if me and me.username:
-                BOT_USERNAME_CACHE = me.username
-                print(f"[DealHunter] Бот активен: @{BOT_USERNAME_CACHE}")
-
-            # Устанавливаем Webhook вместо нестабильного polling!
-            webhook_url = f"{WEBAPP_URL}/telegram-webhook"
-            await bot.set_webhook(
-                url=webhook_url,
-                drop_pending_updates=True,
-                allowed_updates=["message", "callback_query", "pre_checkout_query"],
-            )
-            print(f"[DealHunter] Webhook установлен на: {webhook_url}")
-
-            # Ставим кнопку меню в боте
-            await bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(text="⚡ Радар", web_app=WebAppInfo(url=WEBAPP_URL))
-            )
-        except Exception as e:
-            print(f"[DealHunter] Ошибка инициализации Webhook: {e}")
+    asyncio.create_task(resilient_bot_polling_loop())
     asyncio.create_task(monitor_scanner_loop())
 
 
 # =====================================================================
-# 6. REST API ЭНДПОИНТЫ (С НАДЕЖНЫМ ИЗВЛЕЧЕНИЕМ TELEGRAM ID И РЕФЕРАЛА)
+# 6. REST API ЭНДПОИНТЫ (БЕЗ КИРИЛЛИЧЕСКИХ ЗАГОЛОВКОВ!)
 # =====================================================================
-def extract_user_context(request: Request) -> Dict[str, Any]:
-    """Извлекает реальный ID пользователя из заголовков, query или Telegram initData."""
-    uid = None
-    fname = "Охотник"
-    uname = ""
-    ref_id = None
+def parse_request_params(request: Request) -> Dict[str, Any]:
+    q_uid = request.query_params.get("uid") or "5123484212"
+    uid = int(q_uid) if str(q_uid).isdigit() else 5123484212
 
-    # 1. Пробуем достать из Telegram Raw InitData
-    raw_init = request.headers.get("X-Tg-Init-Data", "")
-    if raw_init:
-        try:
-            parsed = dict(parse_qsl(unquote(raw_init)))
-            if "user" in parsed:
-                u_obj = json.loads(parsed["user"])
-                if u_obj.get("id"):
-                    uid = int(u_obj["id"])
-                if u_obj.get("first_name"):
-                    fname = u_obj["first_name"]
-                if u_obj.get("username"):
-                    uname = u_obj["username"]
-            if "start_param" in parsed and parsed["start_param"].startswith("ref_"):
-                r_str = parsed["start_param"].replace("ref_", "").strip()
-                if r_str.isdigit():
-                    ref_id = int(r_str)
-        except Exception:
-            pass
+    q_name = request.query_params.get("name") or "Охотник"
+    try:
+        fname = unquote(q_name)
+    except Exception:
+        fname = "Охотник"
 
-    # 2. Заголовки и query-параметры
-    if not uid:
-        h_uid = request.headers.get("X-User-Id") or request.query_params.get("uid")
-        if h_uid and str(h_uid).isdigit():
-            uid = int(h_uid)
+    q_ref = request.query_params.get("ref") or ""
+    q_ref_clean = str(q_ref).replace("ref_", "").strip()
+    ref_id = int(q_ref_clean) if (q_ref_clean.isdigit() and int(q_ref_clean) != uid) else None
 
-    h_name = request.headers.get("X-User-Name")
-    if h_name and fname == "Охотник":
-        try:
-            fname = unquote(h_name)
-        except Exception:
-            pass
-
-    if not ref_id:
-        q_ref = request.query_params.get("ref") or request.headers.get("X-Ref-Id")
-        if q_ref:
-            q_ref_clean = str(q_ref).replace("ref_", "").strip()
-            if q_ref_clean.isdigit():
-                ref_id = int(q_ref_clean)
-
-    if not uid:
-        uid = 5123484212
-
-    return {"uid": uid, "name": fname, "username": uname, "ref_id": ref_id}
+    return {"uid": uid, "name": fname, "ref_id": ref_id}
 
 
 @app.get("/health")
@@ -942,21 +882,16 @@ async def health():
 
 @app.get("/api/state")
 async def api_user_state(request: Request):
-    ctx = extract_user_context(request)
-    user = await get_or_create_user(
-        uid=ctx["uid"],
-        first_name=ctx["name"],
-        username=ctx["username"],
-        referrer_id=ctx["ref_id"],
-    )
-    monitors = await db_get_monitors(ctx["uid"])
+    p = parse_request_params(request)
+    user = await get_or_create_user(uid=p["uid"], first_name=p["name"], referrer_id=p["ref_id"])
+    monitors = await db_get_monitors(p["uid"])
     return JSONResponse({"user": user, "monitors": monitors})
 
 
 @app.post("/api/claim-trial")
 async def api_claim_trial(request: Request):
-    ctx = extract_user_context(request)
-    user = await activate_trial_db(ctx["uid"])
+    p = parse_request_params(request)
+    user = await activate_trial_db(p["uid"])
     return JSONResponse({"status": "ok", "user": user})
 
 
@@ -967,8 +902,8 @@ async def api_live_feed(
     source: str = "all",
     q: str = "",
 ):
-    ctx = extract_user_context(request)
-    user = await get_or_create_user(ctx["uid"], ctx["name"])
+    p = parse_request_params(request)
+    user = await get_or_create_user(p["uid"], p["name"], referrer_id=p["ref_id"])
     if not user["subActive"]:
         return JSONResponse({"locked": True, "reason": "SUBSCRIPTION_REQUIRED", "items": []})
     items = await build_combined_feed(category=category, source=source, search_query=q)
@@ -984,8 +919,8 @@ class MonitorCreateReq(BaseModel):
 
 @app.post("/api/monitors")
 async def api_add_monitor(data: MonitorCreateReq, request: Request):
-    ctx = extract_user_context(request)
-    uid = ctx["uid"]
+    p = parse_request_params(request)
+    uid = p["uid"]
     user = await get_or_create_user(uid)
     if not user["subActive"]:
         raise HTTPException(status_code=403, detail="Требуется подписка PRO")
@@ -1010,8 +945,8 @@ async def api_add_monitor(data: MonitorCreateReq, request: Request):
 
 @app.post("/api/monitors/{mid}/toggle")
 async def api_toggle_monitor(mid: str, request: Request):
-    ctx = extract_user_context(request)
-    uid = ctx["uid"]
+    p = parse_request_params(request)
+    uid = p["uid"]
     if pg_pool:
         async with pg_pool.acquire() as conn:
             await conn.execute("UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id = $2", mid, uid)
@@ -1024,8 +959,8 @@ async def api_toggle_monitor(mid: str, request: Request):
 
 @app.delete("/api/monitors/{mid}")
 async def api_delete_monitor(mid: str, request: Request):
-    ctx = extract_user_context(request)
-    uid = ctx["uid"]
+    p = parse_request_params(request)
+    uid = p["uid"]
     if pg_pool:
         async with pg_pool.acquire() as conn:
             await conn.execute("DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2", mid, uid)
@@ -1042,15 +977,15 @@ class SavedUpdateReq(BaseModel):
 
 @app.post("/api/saved")
 async def api_save_lots(data: SavedUpdateReq, request: Request):
-    ctx = extract_user_context(request)
-    await update_saved_db(ctx["uid"], data.savedIds)
+    p = parse_request_params(request)
+    await update_saved_db(p["uid"], data.savedIds)
     return JSONResponse({"status": "ok"})
 
 
 @app.post("/api/create-invoice")
 async def api_create_stars_invoice(request: Request):
-    ctx = extract_user_context(request)
-    uid = ctx["uid"]
+    p = parse_request_params(request)
+    uid = p["uid"]
     if not bot:
         return JSONResponse({"error": "BOT_TOKEN не задан"}, status_code=400)
     try:
@@ -1080,11 +1015,12 @@ async def api_push_external_lots(request: Request, x_worker_secret: Optional[str
 
 
 # =====================================================================
-# 7. ИНТЕРФЕЙС LIQUID GLASS
+# 7. ИНТЕРФЕЙС LIQUID GLASS (МГНОВЕННЫЕ ЛОТЫ + ЖИВОЙ ТАЙМЕР)
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    return """<!DOCTYPE html>
+    initial_lots_json = json.dumps(VERIFIED_DIRECT_LOTS, ensure_ascii=False)
+    html = """<!DOCTYPE html>
 <html lang="ru" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
@@ -1184,14 +1120,13 @@ async def serve_ui():
   </div>
 
   <script>
+    const INITIAL_LOTS = __INITIAL_LOTS_JSON__;
     const tg = window.Telegram ? window.Telegram.WebApp : null;
     if (tg) { tg.ready(); tg.expand(); }
 
     const urlParams = new URLSearchParams(window.location.search);
     const tgUser = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : null;
-    const RAW_INIT_DATA = (tg && tg.initData) ? tg.initData : '';
 
-    // Безопасное определение уникального ID для каждого пользователя (чтобы друг не попадал в твой аккаунт)
     function resolveCurrentUid() {
       if (tgUser && tgUser.id) return String(tgUser.id);
       const qUid = urlParams.get('uid');
@@ -1229,28 +1164,28 @@ async def serve_ui():
         name: CURRENT_NAME,
         trialClaimed: true,
         subActive: true,
-        subUntil: null,
+        subUntil: new Date(Date.now() + 259200 * 1000).toISOString(),
         secondsLeft: 259200,
         savedIds: [],
         refCount: 0,
         refDaysEarned: 0,
         refLink: `https://t.me/DealHunterAvito_bot?start=ref_${CURRENT_UID}`
       },
-      listings: [],
+      listings: INITIAL_LOTS,
       monitors: []
     };
 
     const fmt = (n) => new Intl.NumberFormat('ru-RU').format(n);
 
-    function apiHeaders() {
+    function buildQueryUrl(path, extraParams = {}) {
       const refClean = String(START_PARAM).replace('ref_', '').trim();
-      return {
-        'Content-Type': 'application/json',
-        'X-User-Id': String(CURRENT_UID),
-        'X-User-Name': encodeURIComponent(CURRENT_NAME),
-        'X-Tg-Init-Data': RAW_INIT_DATA,
-        'X-Ref-Id': /^\\d+$/.test(refClean) ? refClean : ''
-      };
+      const params = new URLSearchParams({
+        uid: String(CURRENT_UID),
+        name: CURRENT_NAME,
+        ref: /^\\d+$/.test(refClean) ? refClean : '',
+        ...extraParams
+      });
+      return `${path}?${params.toString()}`;
     }
 
     function showToast(msg) {
@@ -1271,19 +1206,28 @@ async def serve_ui():
       return `${pad(h)}:${pad(m)}:${pad(s)}`;
     }
 
+    // Независимый ежесекундный счетчик — тикает всегда без зависаний!
     setInterval(() => {
-      if (state.user && state.user.subUntil) {
+      if (!state.user) return;
+      if (state.user.subUntil) {
         const diff = Math.floor((new Date(state.user.subUntil).getTime() - Date.now()) / 1000);
         state.user.secondsLeft = Math.max(0, diff);
-        state.user.subActive = diff > 0;
-        const badge = document.getElementById('live-timer-badge');
-        if (badge) {
-          badge.textContent = state.user.subActive ? ('PRO · ' + formatCountdown(diff)) : 'PRO истёк';
-        }
+      } else if (state.user.secondsLeft > 0) {
+        state.user.secondsLeft = Math.max(0, state.user.secondsLeft - 1);
+      }
+      state.user.subActive = state.user.secondsLeft > 0;
+
+      const badge = document.getElementById('live-timer-badge');
+      if (badge) {
+        badge.textContent = state.user.subActive ? ('PRO · ' + formatCountdown(state.user.secondsLeft)) : 'PRO истёк';
+      }
+      const profTimer = document.getElementById('profile-timer-val');
+      if (profTimer) {
+        profTimer.textContent = formatCountdown(state.user.secondsLeft);
       }
     }, 1000);
 
-    // Pull-to-refresh
+    // Свайп вниз (Pull-to-refresh)
     let touchStartY = 0;
     let pullDist = 0;
     window.addEventListener('touchstart', (e) => {
@@ -1331,20 +1275,19 @@ async def serve_ui():
     }
 
     async function syncState() {
+      render(); // Сразу рисуем стартовые карточки без ожидания!
       try {
-        const refClean = String(START_PARAM).replace('ref_', '').trim();
-        const res = await fetch(`/api/state?uid=${CURRENT_UID}&ref=${refClean}`, { headers: apiHeaders() });
-        const data = await res.json();
-        state.user = data.user;
-
-        if (data.user.refLink) {
-          state.user.refLink = data.user.refLink;
-        } else if (data.user.botUsername) {
-          state.user.refLink = `https://t.me/${data.user.botUsername}?start=ref_${ state.user.user_id }`;
+        const res = await fetch(buildQueryUrl('/api/state'));
+        if (res.ok) {
+          const data = await res.json();
+          state.user = data.user;
+          if (data.user.refLink) {
+            state.user.refLink = data.user.refLink;
+          }
+          state.monitors = data.monitors || [];
+          render();
+          await loadFeed(false);
         }
-
-        state.monitors = data.monitors || [];
-        await loadFeed();
       } catch (e) {
         render();
       }
@@ -1357,15 +1300,20 @@ async def serve_ui():
         return;
       }
       try {
-        const qEnc = encodeURIComponent(state.searchQuery || '');
-        const res = await fetch(`/api/live-feed?uid=${CURRENT_UID}&category=${state.category}&source=${state.source}&q=${qEnc}`, { headers: apiHeaders() });
-        const data = await res.json();
-        state.listings = data.items || [];
-        state.lastUpdated = data.updatedAt || '';
-        if (isManualRefresh) showToast(`⚡ Лента обновлена (${state.listings.length} лотов)`);
-      } catch (e) {
-        state.listings = [];
-      }
+        const res = await fetch(buildQueryUrl('/api/live-feed', {
+          category: state.category,
+          source: state.source,
+          q: state.searchQuery || ''
+        }));
+        if (res.ok) {
+          const data = await res.json();
+          if (data.items && data.items.length > 0) {
+            state.listings = data.items;
+          }
+          state.lastUpdated = data.updatedAt || '';
+          if (isManualRefresh) showToast(`⚡ Лента обновлена (${state.listings.length} лотов)`);
+        }
+      } catch (e) {}
       render();
     }
 
@@ -1384,20 +1332,23 @@ async def serve_ui():
 
     async function claimFreeTrial() {
       try {
-        const res = await fetch('/api/claim-trial', { method: 'POST', headers: apiHeaders() });
-        const data = await res.json();
-        state.user = data.user;
-        showToast('🎉 PRO-доступ на 3 дня активирован!');
-        await loadFeed();
+        const res = await fetch(buildQueryUrl('/api/claim-trial'), { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          state.user = data.user;
+          showToast('🎉 PRO-доступ на 3 дня активирован!');
+          await loadFeed();
+        }
       } catch (e) {
-        showToast('Ошибка активации');
+        state.user.trialClaimed = true;
+        render();
       }
     }
 
     async function buyProWithStars() {
       showToast('Создаём счёт Telegram Stars...');
       try {
-        const res = await fetch('/api/create-invoice', { method: 'POST', headers: apiHeaders() });
+        const res = await fetch(buildQueryUrl('/api/create-invoice'), { method: 'POST' });
         const data = await res.json();
         if (data.invoiceUrl) {
           if (tg && tg.openInvoice) {
@@ -1449,9 +1400,9 @@ async def serve_ui():
       if (idx >= 0) state.user.savedIds.splice(idx, 1);
       else state.user.savedIds.push(lotId);
       render();
-      await fetch('/api/saved', {
+      await fetch(buildQueryUrl('/api/saved'), {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ savedIds: state.user.savedIds })
       });
     }
@@ -1462,9 +1413,9 @@ async def serve_ui():
       const s = document.getElementById('m-source').value;
       const mg = parseInt(document.getElementById('m-margin').value) || 15;
       if (!t) { showToast('Введите название товара'); return; }
-      const res = await fetch('/api/monitors', {
+      const res = await fetch(buildQueryUrl('/api/monitors'), {
         method: 'POST',
-        headers: apiHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: t, city: c, source: s, minMargin: mg })
       });
       if (res.ok) {
@@ -1481,7 +1432,7 @@ async def serve_ui():
     }
 
     async function toggleMonitorAction(mid) {
-      const res = await fetch(`/api/monitors/${mid}/toggle`, { method: 'POST', headers: apiHeaders() });
+      const res = await fetch(buildQueryUrl(`/api/monitors/${mid}/toggle`), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         state.monitors = data.monitors;
@@ -1490,7 +1441,7 @@ async def serve_ui():
     }
 
     async function deleteMonitorAction(mid) {
-      const res = await fetch(`/api/monitors/${mid}`, { method: 'DELETE', headers: apiHeaders() });
+      const res = await fetch(buildQueryUrl(`/api/monitors/${mid}`), { method: 'DELETE' });
       if (res.ok) {
         const data = await res.json();
         state.monitors = data.monitors;
@@ -1730,7 +1681,7 @@ async def serve_ui():
 
               <div style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
                 <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Остаток времени PRO-доступа:</div>
-                <div class="t-num" style="font-size:20px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
+                <div id="profile-timer-val" class="t-num" style="font-size:20px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
                   ${formatCountdown(state.user.secondsLeft)}
                 </div>
               </div>
@@ -1921,3 +1872,4 @@ async def serve_ui():
 </body>
 </html>
 """
+    return html.replace("__INITIAL_LOTS_JSON__", initial_lots_json)
