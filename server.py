@@ -5,7 +5,7 @@ import sqlite3
 import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, unquote, parse_qsl
 
 import httpx
 from fastapi import FastAPI, Request, Header, HTTPException
@@ -21,25 +21,25 @@ from aiogram.types import (
     WebAppInfo,
     LabeledPrice,
     PreCheckoutQuery,
+    MenuButtonWebApp,
 )
 
 # =====================================================================
 # 1. КОНФИГУРАЦИЯ
 # =====================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip()
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip().rstrip("/")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
 PORT = int(os.getenv("PORT", 10000))
 
-# Твой реальный бот
 BOT_USERNAME_DEFAULT = "DealHunterAvito_bot"
 BOT_USERNAME_CACHE = os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lstrip("@") or BOT_USERNAME_DEFAULT
 
 STARS_PRICE = 350
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
 
-app = FastAPI(title="DealHunter PRO v3.2")
+app = FastAPI(title="DealHunter PRO v3.3 Webhook")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -148,20 +148,48 @@ async def get_or_create_user(
     referrer_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     global BOT_USERNAME_CACHE
-    is_new_user = False
+    now = now_utc()
+    should_reward_ref = False
+    just_granted_trial = False
+
+    valid_ref = referrer_id if (referrer_id and int(referrer_id) != int(uid)) else None
+
     if pg_pool:
         async with pg_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
             if not row:
-                is_new_user = True
-                valid_ref = referrer_id if (referrer_id and referrer_id != uid) else None
+                # Новый пользователь: сразу выдаем 3 дня PRO, чтобы триал никогда не терялся!
+                initial_sub = now + timedelta(days=3)
+                just_granted_trial = True
+                if valid_ref:
+                    should_reward_ref = True
                 await conn.execute(
                     """INSERT INTO dh_users 
                        (user_id, first_name, username, trial_claimed, sub_until, saved_ids, referred_by, ref_count, ref_days_earned)
-                       VALUES ($1, $2, $3, FALSE, NULL, '[]', $4, 0, 0)""",
-                    uid, first_name, username, valid_ref
+                       VALUES ($1, $2, $3, FALSE, $4, '[]', $5, 0, 0)""",
+                    uid, first_name, username, initial_sub, valid_ref
                 )
                 row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
+            else:
+                # Если пользователь уже есть в БД, но ещё не получал 3 дня (sub_until IS NULL и trial_claimed = FALSE)
+                if not row["trial_claimed"] and row["sub_until"] is None:
+                    initial_sub = now + timedelta(days=3)
+                    just_granted_trial = True
+                    await conn.execute(
+                        "UPDATE dh_users SET sub_until = $2 WHERE user_id = $1",
+                        uid, initial_sub
+                    )
+                    row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
+
+                # Если друг уже заходил раньше без рефки, а теперь перешел по твоей реф-ссылке — засчитываем!
+                if valid_ref and row["referred_by"] is None:
+                    await conn.execute(
+                        "UPDATE dh_users SET referred_by = $2 WHERE user_id = $1 AND referred_by IS NULL",
+                        uid, valid_ref
+                    )
+                    should_reward_ref = True
+                    row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
+
             sub_until = row["sub_until"]
             trial_claimed = bool(row["trial_claimed"])
             saved_ids = json.loads(row["saved_ids"] or "[]")
@@ -173,17 +201,41 @@ async def get_or_create_user(
         cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
         row = cur.fetchone()
         if not row:
-            is_new_user = True
-            valid_ref = referrer_id if (referrer_id and referrer_id != uid) else None
+            initial_sub = now + timedelta(days=3)
+            just_granted_trial = True
+            if valid_ref:
+                should_reward_ref = True
             cur.execute(
                 """INSERT INTO dh_users 
                    (user_id, first_name, username, trial_claimed, sub_until, saved_ids, referred_by, ref_count, ref_days_earned, created_at)
-                   VALUES (?, ?, ?, 0, NULL, '[]', ?, 0, 0, ?)""",
-                (uid, first_name, username, valid_ref, now_utc().isoformat())
+                   VALUES (?, ?, ?, 0, ?, '[]', ?, 0, 0, ?)""",
+                (uid, first_name, username, initial_sub.isoformat(), valid_ref, now.isoformat())
             )
             sqlite_conn.commit()
             cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
             row = cur.fetchone()
+        else:
+            if not row["trial_claimed"] and not row["sub_until"]:
+                initial_sub = now + timedelta(days=3)
+                just_granted_trial = True
+                cur.execute(
+                    "UPDATE dh_users SET sub_until = ? WHERE user_id = ?",
+                    (initial_sub.isoformat(), uid)
+                )
+                sqlite_conn.commit()
+                cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
+                row = cur.fetchone()
+
+            if valid_ref and row["referred_by"] is None:
+                cur.execute(
+                    "UPDATE dh_users SET referred_by = ? WHERE user_id = ? AND referred_by IS NULL",
+                    (valid_ref, uid)
+                )
+                sqlite_conn.commit()
+                should_reward_ref = True
+                cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
+                row = cur.fetchone()
+
         sub_until = datetime.fromisoformat(row["sub_until"]) if row["sub_until"] else None
         trial_claimed = bool(row["trial_claimed"])
         saved_ids = json.loads(row["saved_ids"] or "[]")
@@ -191,10 +243,9 @@ async def get_or_create_user(
         ref_count = row["ref_count"] if "ref_count" in row.keys() and row["ref_count"] else 0
         ref_days_earned = row["ref_days_earned"] if "ref_days_earned" in row.keys() and row["ref_days_earned"] else 0
 
-    if is_new_user and referrer_id and referrer_id != uid:
-        await reward_referrer(referrer_id, new_user_name=first_name)
+    if should_reward_ref and valid_ref:
+        await reward_referrer(valid_ref, new_user_name=fname)
 
-    now = now_utc()
     is_active = bool(sub_until and sub_until > now)
     seconds_left = int((sub_until - now).total_seconds()) if is_active else 0
 
@@ -202,6 +253,7 @@ async def get_or_create_user(
         "user_id": uid,
         "name": fname,
         "trialClaimed": trial_claimed,
+        "justGrantedTrial": just_granted_trial,
         "subActive": is_active,
         "subUntil": sub_until.isoformat() if sub_until else None,
         "secondsLeft": seconds_left,
@@ -214,6 +266,7 @@ async def get_or_create_user(
 
 
 async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
+    """Начисляет +2 дня PRO пригласившему и +1 бонусный день другу."""
     bonus_days = 2
     ref_user = await get_or_create_user(referrer_id)
     now = now_utc()
@@ -247,7 +300,8 @@ async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
         try:
             await bot.send_message(
                 referrer_id,
-                f"🎉 <b>По вашей ссылке пришёл {new_user_name}!</b>\n\n"
+                f"🎉 <b>Новый реферал: {new_user_name}!</b>\n\n"
+                f"✅ Друг перешёл по вашей ссылке.\n"
                 f"🎁 Вам начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
                 parse_mode="HTML"
             )
@@ -256,25 +310,25 @@ async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
 
 
 async def activate_trial_db(uid: int) -> Dict[str, Any]:
+    """Подтверждает получение 3 дней PRO при нажатии кнопки в приветственном окне."""
     user = await get_or_create_user(uid)
-    if user["trialClaimed"]:
-        return user
-
     now = now_utc()
-    cur_end = datetime.fromisoformat(user["subUntil"]) if user["subUntil"] else now
-    base_time = cur_end if cur_end > now else now
-    target_until = base_time + timedelta(days=3)
+    cur_end = datetime.fromisoformat(user["subUntil"]) if user["subUntil"] else None
+    if not cur_end or cur_end <= now:
+        target_until = now + timedelta(days=3)
+    else:
+        target_until = cur_end
 
     if pg_pool:
         async with pg_pool.acquire() as conn:
             await conn.execute(
-                "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1 AND trial_claimed = FALSE",
+                "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1",
                 uid, target_until
             )
     else:
         cur = sqlite_conn.cursor()
         cur.execute(
-            "UPDATE dh_users SET trial_claimed = 1, sub_until = ? WHERE user_id = ? AND trial_claimed = 0",
+            "UPDATE dh_users SET trial_claimed = 1, sub_until = ? WHERE user_id = ?",
             (target_until.isoformat(), uid)
         )
         sqlite_conn.commit()
@@ -507,8 +561,7 @@ async def fetch_wb_live(query_text: str = "iPhone 15 Pro") -> List[Dict[str, Any
             try:
                 res = await client.get(ep, headers=headers)
                 if res.status_code == 200:
-                    raw = res.text
-                    data = json.loads(raw)
+                    data = json.loads(res.text)
                     products = data.get("data", {}).get("products", []) or data.get("products", [])
                     if products:
                         break
@@ -725,7 +778,7 @@ async def monitor_scanner_loop():
 
 
 # =====================================================================
-# 5. TELEGRAM BOT
+# 5. TELEGRAM BOT ЧЕРЕЗ WEBHOOK (НИКОГДА НЕ ПАДАЕТ НА RENDER!)
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
@@ -742,21 +795,24 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
         if ref_raw.isdigit() and int(ref_raw) != uid:
             referrer_id = int(ref_raw)
 
-    await get_or_create_user(uid, fname, uname, referrer_id=referrer_id)
+    user = await get_or_create_user(uid, fname, uname, referrer_id=referrer_id)
 
     sep = "&" if "?" in WEBAPP_URL else "?"
-    url = f"{WEBAPP_URL}{sep}uid={uid}"
+    app_url = f"{WEBAPP_URL}{sep}uid={uid}"
+    if referrer_id:
+        app_url += f"&ref={referrer_id}"
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Запустить DealHunter", web_app=WebAppInfo(url=url))],
+            [InlineKeyboardButton(text="⚡ Запустить DealHunter PRO", web_app=WebAppInfo(url=app_url))],
             [InlineKeyboardButton(text="⭐️ Купить Stars со скидкой", url=BUNNY_STARS_URL)],
         ]
     )
     await message.answer(
         f"👋 <b>Привет, {fname}!</b>\n\n"
         "<b>DealHunter PRO</b> — радар выгодных товаров <b>Wildberries, Ozon и Avito</b> с прямыми ссылками на карточки.\n\n"
-        "🎁 Новым пользователям доступно <b>3 дня PRO-подписки бесплатно</b> прямо внутри приложения!\n"
-        "👥 Приглашай друзей из вкладки «Профиль» и получай <b>+2 дня PRO</b> за каждого друга!",
+        "🎁 Вам уже доступно <b>3 дня PRO-подписки бесплатно</b> — нажмите кнопку ниже, чтобы открыть радар!\n"
+        "👥 Приглашайте друзей во вкладке «Профиль» и получайте <b>+2 дня PRO</b> за каждого друга!",
         parse_mode="HTML",
         reply_markup=kb,
     )
@@ -779,6 +835,20 @@ async def on_successful_payment(message: types.Message):
     )
 
 
+@app.post("/telegram-webhook")
+async def telegram_webhook_endpoint(request: Request):
+    """Принимает сообщения от Telegram мгновенно и без конфликта поллинга."""
+    if not bot:
+        return JSONResponse({"ok": False})
+    try:
+        data = await request.json()
+        update = types.Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        print(f"[Webhook Error] {e}")
+    return JSONResponse({"ok": True})
+
+
 @app.on_event("startup")
 async def on_startup():
     global BOT_USERNAME_CACHE
@@ -788,20 +858,80 @@ async def on_startup():
             me = await bot.get_me()
             if me and me.username:
                 BOT_USERNAME_CACHE = me.username
-                print(f"[DealHunter] Авторизован бот: @{BOT_USERNAME_CACHE}")
-            await bot.delete_webhook(drop_pending_updates=True)
-            asyncio.create_task(dp.start_polling(bot, handle_signals=False))
+                print(f"[DealHunter] Бот активен: @{BOT_USERNAME_CACHE}")
+
+            # Устанавливаем Webhook вместо нестабильного polling!
+            webhook_url = f"{WEBAPP_URL}/telegram-webhook"
+            await bot.set_webhook(
+                url=webhook_url,
+                drop_pending_updates=True,
+                allowed_updates=["message", "callback_query", "pre_checkout_query"],
+            )
+            print(f"[DealHunter] Webhook установлен на: {webhook_url}")
+
+            # Ставим кнопку меню в боте
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="⚡ Радар", web_app=WebAppInfo(url=WEBAPP_URL))
+            )
         except Exception as e:
-            print(f"[DealHunter] Ошибка бота: {e}")
+            print(f"[DealHunter] Ошибка инициализации Webhook: {e}")
     asyncio.create_task(monitor_scanner_loop())
 
 
 # =====================================================================
-# 6. REST API ЭНДПОИНТЫ
+# 6. REST API ЭНДПОИНТЫ (С НАДЕЖНЫМ ИЗВЛЕЧЕНИЕМ TELEGRAM ID И РЕФЕРАЛА)
 # =====================================================================
-def extract_uid(request: Request) -> int:
-    raw = request.headers.get("X-User-Id") or request.query_params.get("uid") or "5123484212"
-    return int(raw) if str(raw).isdigit() else 5123484212
+def extract_user_context(request: Request) -> Dict[str, Any]:
+    """Извлекает реальный ID пользователя из заголовков, query или Telegram initData."""
+    uid = None
+    fname = "Охотник"
+    uname = ""
+    ref_id = None
+
+    # 1. Пробуем достать из Telegram Raw InitData
+    raw_init = request.headers.get("X-Tg-Init-Data", "")
+    if raw_init:
+        try:
+            parsed = dict(parse_qsl(unquote(raw_init)))
+            if "user" in parsed:
+                u_obj = json.loads(parsed["user"])
+                if u_obj.get("id"):
+                    uid = int(u_obj["id"])
+                if u_obj.get("first_name"):
+                    fname = u_obj["first_name"]
+                if u_obj.get("username"):
+                    uname = u_obj["username"]
+            if "start_param" in parsed and parsed["start_param"].startswith("ref_"):
+                r_str = parsed["start_param"].replace("ref_", "").strip()
+                if r_str.isdigit():
+                    ref_id = int(r_str)
+        except Exception:
+            pass
+
+    # 2. Заголовки и query-параметры
+    if not uid:
+        h_uid = request.headers.get("X-User-Id") or request.query_params.get("uid")
+        if h_uid and str(h_uid).isdigit():
+            uid = int(h_uid)
+
+    h_name = request.headers.get("X-User-Name")
+    if h_name and fname == "Охотник":
+        try:
+            fname = unquote(h_name)
+        except Exception:
+            pass
+
+    if not ref_id:
+        q_ref = request.query_params.get("ref") or request.headers.get("X-Ref-Id")
+        if q_ref:
+            q_ref_clean = str(q_ref).replace("ref_", "").strip()
+            if q_ref_clean.isdigit():
+                ref_id = int(q_ref_clean)
+
+    if not uid:
+        uid = 5123484212
+
+    return {"uid": uid, "name": fname, "username": uname, "ref_id": ref_id}
 
 
 @app.get("/health")
@@ -812,19 +942,21 @@ async def health():
 
 @app.get("/api/state")
 async def api_user_state(request: Request):
-    uid = extract_uid(request)
-    fname = request.headers.get("X-User-Name", "Охотник")
-    ref_param = request.query_params.get("ref")
-    ref_id = int(ref_param) if (ref_param and ref_param.isdigit()) else None
-    user = await get_or_create_user(uid, fname, referrer_id=ref_id)
-    monitors = await db_get_monitors(uid)
+    ctx = extract_user_context(request)
+    user = await get_or_create_user(
+        uid=ctx["uid"],
+        first_name=ctx["name"],
+        username=ctx["username"],
+        referrer_id=ctx["ref_id"],
+    )
+    monitors = await db_get_monitors(ctx["uid"])
     return JSONResponse({"user": user, "monitors": monitors})
 
 
 @app.post("/api/claim-trial")
 async def api_claim_trial(request: Request):
-    uid = extract_uid(request)
-    user = await activate_trial_db(uid)
+    ctx = extract_user_context(request)
+    user = await activate_trial_db(ctx["uid"])
     return JSONResponse({"status": "ok", "user": user})
 
 
@@ -835,8 +967,8 @@ async def api_live_feed(
     source: str = "all",
     q: str = "",
 ):
-    uid = extract_uid(request)
-    user = await get_or_create_user(uid)
+    ctx = extract_user_context(request)
+    user = await get_or_create_user(ctx["uid"], ctx["name"])
     if not user["subActive"]:
         return JSONResponse({"locked": True, "reason": "SUBSCRIPTION_REQUIRED", "items": []})
     items = await build_combined_feed(category=category, source=source, search_query=q)
@@ -852,7 +984,8 @@ class MonitorCreateReq(BaseModel):
 
 @app.post("/api/monitors")
 async def api_add_monitor(data: MonitorCreateReq, request: Request):
-    uid = extract_uid(request)
+    ctx = extract_user_context(request)
+    uid = ctx["uid"]
     user = await get_or_create_user(uid)
     if not user["subActive"]:
         raise HTTPException(status_code=403, detail="Требуется подписка PRO")
@@ -877,7 +1010,8 @@ async def api_add_monitor(data: MonitorCreateReq, request: Request):
 
 @app.post("/api/monitors/{mid}/toggle")
 async def api_toggle_monitor(mid: str, request: Request):
-    uid = extract_uid(request)
+    ctx = extract_user_context(request)
+    uid = ctx["uid"]
     if pg_pool:
         async with pg_pool.acquire() as conn:
             await conn.execute("UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id = $2", mid, uid)
@@ -890,7 +1024,8 @@ async def api_toggle_monitor(mid: str, request: Request):
 
 @app.delete("/api/monitors/{mid}")
 async def api_delete_monitor(mid: str, request: Request):
-    uid = extract_uid(request)
+    ctx = extract_user_context(request)
+    uid = ctx["uid"]
     if pg_pool:
         async with pg_pool.acquire() as conn:
             await conn.execute("DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2", mid, uid)
@@ -907,14 +1042,15 @@ class SavedUpdateReq(BaseModel):
 
 @app.post("/api/saved")
 async def api_save_lots(data: SavedUpdateReq, request: Request):
-    uid = extract_uid(request)
-    await update_saved_db(uid, data.savedIds)
+    ctx = extract_user_context(request)
+    await update_saved_db(ctx["uid"], data.savedIds)
     return JSONResponse({"status": "ok"})
 
 
 @app.post("/api/create-invoice")
 async def api_create_stars_invoice(request: Request):
-    uid = extract_uid(request)
+    ctx = extract_user_context(request)
+    uid = ctx["uid"]
     if not bot:
         return JSONResponse({"error": "BOT_TOKEN не задан"}, status_code=400)
     try:
@@ -1053,9 +1189,27 @@ async def serve_ui():
 
     const urlParams = new URLSearchParams(window.location.search);
     const tgUser = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : null;
-    const CURRENT_UID = tgUser ? tgUser.id : (urlParams.get('uid') || '5123484212');
+    const RAW_INIT_DATA = (tg && tg.initData) ? tg.initData : '';
+
+    // Безопасное определение уникального ID для каждого пользователя (чтобы друг не попадал в твой аккаунт)
+    function resolveCurrentUid() {
+      if (tgUser && tgUser.id) return String(tgUser.id);
+      const qUid = urlParams.get('uid');
+      if (qUid && /^\\d+$/.test(qUid)) return qUid;
+      let localUid = localStorage.getItem('dh_Guest_Uid');
+      if (!localUid) {
+        localUid = String(Math.floor(100000000 + Math.random() * 900000000));
+        localStorage.setItem('dh_Guest_Uid', localUid);
+      }
+      return localUid;
+    }
+
+    const CURRENT_UID = resolveCurrentUid();
     const CURRENT_NAME = tgUser ? (tgUser.first_name || 'Охотник') : 'Охотник';
-    const START_PARAM = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) ? tg.initDataUnsafe.start_param : '';
+    const START_PARAM = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param)
+      ? tg.initDataUnsafe.start_param
+      : (urlParams.get('ref') || urlParams.get('startapp') || '');
+
     const BUNNY_STARS_LINK = "https://t.me/BunnyStarsBot?startapp=ref_5123484212";
 
     const state = {
@@ -1074,9 +1228,9 @@ async def serve_ui():
         user_id: CURRENT_UID,
         name: CURRENT_NAME,
         trialClaimed: true,
-        subActive: false,
+        subActive: true,
         subUntil: null,
-        secondsLeft: 0,
+        secondsLeft: 259200,
         savedIds: [],
         refCount: 0,
         refDaysEarned: 0,
@@ -1089,10 +1243,13 @@ async def serve_ui():
     const fmt = (n) => new Intl.NumberFormat('ru-RU').format(n);
 
     function apiHeaders() {
+      const refClean = String(START_PARAM).replace('ref_', '').trim();
       return {
         'Content-Type': 'application/json',
         'X-User-Id': String(CURRENT_UID),
-        'X-User-Name': encodeURIComponent(CURRENT_NAME)
+        'X-User-Name': encodeURIComponent(CURRENT_NAME),
+        'X-Tg-Init-Data': RAW_INIT_DATA,
+        'X-Ref-Id': /^\\d+$/.test(refClean) ? refClean : ''
       };
     }
 
@@ -1175,17 +1332,17 @@ async def serve_ui():
 
     async function syncState() {
       try {
-        const refClean = START_PARAM.startsWith('ref_') ? START_PARAM.replace('ref_', '') : '';
-        const res = await fetch(`/api/state?ref=${refClean}`, { headers: apiHeaders() });
+        const refClean = String(START_PARAM).replace('ref_', '').trim();
+        const res = await fetch(`/api/state?uid=${CURRENT_UID}&ref=${refClean}`, { headers: apiHeaders() });
         const data = await res.json();
         state.user = data.user;
-        
+
         if (data.user.refLink) {
           state.user.refLink = data.user.refLink;
         } else if (data.user.botUsername) {
-          state.user.refLink = `https://t.me/${data.user.botUsername}?start=ref_${CURRENT_UID}`;
+          state.user.refLink = `https://t.me/${data.user.botUsername}?start=ref_${ state.user.user_id }`;
         }
-        
+
         state.monitors = data.monitors || [];
         await loadFeed();
       } catch (e) {
@@ -1201,7 +1358,7 @@ async def serve_ui():
       }
       try {
         const qEnc = encodeURIComponent(state.searchQuery || '');
-        const res = await fetch(`/api/live-feed?category=${state.category}&source=${state.source}&q=${qEnc}`, { headers: apiHeaders() });
+        const res = await fetch(`/api/live-feed?uid=${CURRENT_UID}&category=${state.category}&source=${state.source}&q=${qEnc}`, { headers: apiHeaders() });
         const data = await res.json();
         state.listings = data.items || [];
         state.lastUpdated = data.updatedAt || '';
@@ -1230,7 +1387,7 @@ async def serve_ui():
         const res = await fetch('/api/claim-trial', { method: 'POST', headers: apiHeaders() });
         const data = await res.json();
         state.user = data.user;
-        showToast('🎉 PRO-доступ активирован на 3 дня!');
+        showToast('🎉 PRO-доступ на 3 дня активирован!');
         await loadFeed();
       } catch (e) {
         showToast('Ошибка активации');
@@ -1272,7 +1429,7 @@ async def serve_ui():
 
     function shareRefLink() {
       const link = state.user.refLink;
-      const text = "🔥 Лови радар выгодных товаров Avito, Ozon и Wildberries! По моей ссылке тебе дадут 3 дня PRO бесплатно:";
+      const text = "🔥 Лови радар выгодных товаров Avito, Ozon и Wildberries! Переходи по ссылке и забирай 3 дня PRO бесплатно:";
       const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
       openExternalLink(shareUrl);
     }
@@ -1661,7 +1818,7 @@ async def serve_ui():
               <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
               <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Активируйте бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b>, а также мгновенным уведомлениям в Telegram. Таймер запустится сразу после нажатия.
+                Мы начислили вам бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b> и авто-уведомлениям в Telegram на 3 дня!
               </p>
               <button class="btn btn-large btn-accent" onclick="claimFreeTrial()">
                 <i data-lucide="zap" style="width:18px; height:18px;"></i>
