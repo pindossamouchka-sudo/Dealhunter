@@ -24,19 +24,20 @@ from aiogram.types import (
 )
 
 # =====================================================================
-# 1. КОНФИГУРАЦИЯ
+# 1. КОНФИГУРАЦИЯ И СЕТЬ
 # =====================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
+ENV_BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
 PORT = int(os.getenv("PORT", 10000))
 
 STARS_PRICE = 350
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
-BOT_USERNAME_CACHE = "DealHunterBot"
+BOT_USERNAME_CACHE = ENV_BOT_USERNAME or "DealHunterBot"
 
-app = FastAPI(title="DealHunter PRO v3.0")
+app = FastAPI(title="DealHunter PRO v3.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,7 +50,7 @@ bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 
 # =====================================================================
-# 2. НАДЕЖНЫЙ СЛОЙ БАЗЫ ДАННЫХ (PostgreSQL + Авто-миграция рефералов)
+# 2. НАДЕЖНАЯ БАЗА ДАННЫХ (PostgreSQL / SQLite с вечными рефералами)
 # =====================================================================
 pg_pool = None
 sqlite_conn = None
@@ -91,7 +92,6 @@ async def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
-            # Безопасная миграция для существующих таблиц (чтобы ничего не сбросилось)
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0;")
@@ -145,6 +145,7 @@ async def get_or_create_user(
     username: str = "",
     referrer_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+    global BOT_USERNAME_CACHE
     is_new_user = False
     if pg_pool:
         async with pg_pool.acquire() as conn:
@@ -188,7 +189,6 @@ async def get_or_create_user(
         ref_count = row["ref_count"] if "ref_count" in row.keys() and row["ref_count"] else 0
         ref_days_earned = row["ref_days_earned"] if "ref_days_earned" in row.keys() and row["ref_days_earned"] else 0
 
-    # Если это новый пользователь, пришедший по реферальной ссылке — начисляем бонус пригласившему (+2 дня PRO)
     if is_new_user and referrer_id and referrer_id != uid:
         await reward_referrer(referrer_id, new_user_name=first_name)
 
@@ -206,12 +206,12 @@ async def get_or_create_user(
         "savedIds": saved_ids,
         "refCount": ref_count,
         "refDaysEarned": ref_days_earned,
+        "botUsername": BOT_USERNAME_CACHE,
         "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{uid}",
     }
 
 
 async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
-    """Начисляет +2 дня PRO пригласившему и сохраняет статистику навечно в БД."""
     bonus_days = 2
     ref_user = await get_or_create_user(referrer_id)
     now = now_utc()
@@ -245,8 +245,8 @@ async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
         try:
             await bot.send_message(
                 referrer_id,
-                f"🎉 <b>По вашей реферальной ссылке присоединился {new_user_name}!</b>\n\n"
-                f"🎁 Вам автоматически начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
+                f"🎉 <b>По вашей ссылке пришёл {new_user_name}!</b>\n\n"
+                f"🎁 Вам начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
                 parse_mode="HTML"
             )
         except Exception:
@@ -339,11 +339,10 @@ async def db_get_monitors(uid: int) -> List[Dict[str, Any]]:
 
 
 # =====================================================================
-# 3. РЕАЛЬНЫЕ КАРТОЧКИ И ЖИВОЙ ПАРСЕР WILDBERRIES API (БЕЗ ПОИСКОВЫХ ЗАГЛУШЕК)
+# 3. НАСТОЯЩИЕ КАРТОЧКИ И ПРЯМОЙ ПАРСИНГ WB API (ПРЯМЫЕ ССЫЛКИ)
 # =====================================================================
 EXTERNAL_LOTS_BUFFER: List[Dict[str, Any]] = []
 
-# Настоящие проверенные артикулы и прямые карточки товаров (никаких ссылок на общий /search!)
 VERIFIED_DIRECT_LOTS = [
     {
         "id": "wb_252295571",
@@ -362,7 +361,7 @@ VERIFIED_DIRECT_LOTS = [
             {"icon": "zap", "text": "WB Кошелек"},
         ],
         "seller": {"name": "Apple Official Supply", "rating": 4.9, "reviews": 642},
-        "desc": "Оригинальный Apple iPhone 16 Pro 256 ГБ в заводской пломбе. Официальная гарантия 1 год, проверка по серийному номеру на сайте Apple перед получением в ПВЗ.",
+        "desc": "Оригинальный Apple iPhone 16 Pro 256 ГБ в заводской пломбе. Официальная гарантия 1 год, проверка по серийному номеру перед получением в ПВЗ.",
         "url": "https://www.wildberries.ru/catalog/252295571/detail.aspx",
     },
     {
@@ -422,7 +421,7 @@ VERIFIED_DIRECT_LOTS = [
             {"icon": "truck", "text": "Ozon Доставка"},
         ],
         "seller": {"name": "Ozon Казахстан / РФ", "rating": 4.9, "reviews": 418},
-        "desc": "Оригинальный MacBook Air 13 на чипе M3 в расширенной конфигурации 16 ГБ объединенной памяти и 512 ГБ SSD. Заводская упаковка.",
+        "desc": "Оригинальный MacBook Air 13 на чипе M3 в конфигурации 16 ГБ объединенной памяти и 512 ГБ SSD. Заводская упаковка.",
         "url": "https://www.ozon.ru/product/noutbuk-apple-macbook-air-13-m3-16-512-gb-1429803951/",
     },
     {
@@ -442,7 +441,7 @@ VERIFIED_DIRECT_LOTS = [
             {"icon": "flame", "text": "DLSS 3.5"},
         ],
         "seller": {"name": "Ситилинк Официальный", "rating": 4.9, "reviews": 530},
-        "desc": "Новая видеокарта Palit GeForce RTX 4070 SUPER Dual (NED407S019K9-1043D). Пломбы на антистатическом пакете, чек и официальная гарантия 36 мес.",
+        "desc": "Новая видеокарта Palit GeForce RTX 4070 SUPER Dual. Пломбы на антистатическом пакете, чек и официальная гарантия 36 мес.",
         "url": "https://www.ozon.ru/product/videokarta-palit-geforce-rtx-4070-super-dual-12-gb-1398451204/",
     },
     {
@@ -462,7 +461,7 @@ VERIFIED_DIRECT_LOTS = [
             {"icon": "box", "text": "Полный комплект"},
         ],
         "seller": {"name": "Алексей", "rating": 5.0, "reviews": 64},
-        "desc": "Личный телефон, покупался в re:Store. С первого дня в защитном стекле и чехле. Не вскрывался, любые проверки через 3uTools при встрече.",
+        "desc": "Личный телефон, покупался в re:Store. С первого дня в чехле и бронестекле. Не вскрывался, любые проверки через 3uTools при встрече.",
         "url": "https://www.avito.ru/moskva/telefony/iphone_15_pro_max_256gb_natural_titanium_4189205412",
     },
     {
@@ -482,14 +481,13 @@ VERIFIED_DIRECT_LOTS = [
             {"icon": "thermometer", "text": "Макс 63°C"},
         ],
         "seller": {"name": "Михаил", "rating": 4.9, "reviews": 39},
-        "desc": "Карта на гарантии DNS еще 2 года (бумажный чек на руках). Стоит в домашнем ПК, тест FurMark в 2K проходит при 63 градусах.",
+        "desc": "Карта на гарантии DNS еще 2 года (бумажный чек на руках). Стоит в домашнем ПК, стресс-тест FurMark проходит безупречно.",
         "url": "https://www.avito.ru/sankt-peterburg/tovary_dlya_kompyutera/msi_rtx_4070_ti_gaming_x_trio_12gb_4201948105",
     },
 ]
 
 
 async def fetch_wb_live(query_text: str = "iPhone 15 Pro") -> List[Dict[str, Any]]:
-    """Мульти-шлюзовый парсер реальных товаров Wildberries с прямыми ссылками на карточки по nmId."""
     endpoints = [
         f"https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&query={quote(query_text)}&resultset=catalog&sort=popular&spp=30",
         f"https://search.wb.ru/exactmatch/ru/common/v7/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&query={quote(query_text)}&resultset=catalog&sort=popular&spp=30",
@@ -588,8 +586,8 @@ async def fetch_wb_live(query_text: str = "iPhone 15 Pro") -> List[Dict[str, Any
             },
             "desc": (
                 f"Настоящая карточка товара Wildberries (Артикул: {pid}). "
-                f"Продавец: {supplier}. Рейтинг товара {rating} на основе {feedbacks} реальных отзывов покупателей. "
-                f"Нажмите кнопку ниже, чтобы открыть именно эту карточку товара в приложении или на сайте Wildberries."
+                f"Продавец: {supplier}. Рейтинг товара {rating} на основе {feedbacks} отзывов покупателей. "
+                f"Кликните «Забрать лот», чтобы открыть именно эту карточку на сайте или в приложении Wildberries."
             ),
             "url": f"https://www.wildberries.ru/catalog/{pid}/detail.aspx",
         })
@@ -613,11 +611,8 @@ async def build_combined_feed(
         }.get(category, "Apple iPhone 15 Pro")
 
     wb_live_items = await fetch_wb_live(wb_query)
-
-    # Собираем общий пул без единой поисковой заглушки
     combined = list(EXTERNAL_LOTS_BUFFER) + wb_live_items + list(VERIFIED_DIRECT_LOTS)
 
-    # Убираем дубликаты по ID
     seen_ids = set()
     unique_list = []
     for item in combined:
@@ -646,7 +641,7 @@ async def build_combined_feed(
 
 
 # =====================================================================
-# 4. ФОНОВЫЙ СКАНЕР УВЕДОМЛЕНИЙ ДЛЯ МОНИТОРОВ
+# 4. ФОНОВЫЙ СКАНЕР МОНИТОРОВ И ПУШ-УВЕДОМЛЕНИЙ
 # =====================================================================
 async def monitor_scanner_loop():
     await asyncio.sleep(10)
@@ -728,7 +723,7 @@ async def monitor_scanner_loop():
 
 
 # =====================================================================
-# 5. TELEGRAM BOT + РЕФЕРАЛЬНЫЙ DEEP-LINKING + STARS ОПЛАТА
+# 5. TELEGRAM BOT + ОПРЕДЕЛЕНИЕ СВОЕГО ЮЗЕРНЕЙМА + ПЛАТЕЖИ
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
@@ -736,7 +731,6 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
     fname = message.from_user.first_name or "Охотник"
     uname = message.from_user.username or ""
 
-    # Обработка реферального параметра /start ref_123456
     referrer_id = None
     args = command.args if command else None
     if not args and message.text and " " in message.text:
@@ -787,16 +781,17 @@ async def on_successful_payment(message: types.Message):
 async def on_startup():
     global BOT_USERNAME_CACHE
     await init_db()
-    asyncio.create_task(monitor_scanner_loop())
     if bot:
         try:
             me = await bot.get_me()
             if me and me.username:
                 BOT_USERNAME_CACHE = me.username
+                print(f"[DealHunter] Авторизован бот: @{BOT_USERNAME_CACHE}")
             await bot.delete_webhook(drop_pending_updates=True)
             asyncio.create_task(dp.start_polling(bot, handle_signals=False))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[DealHunter] Ошибка бота: {e}")
+    asyncio.create_task(monitor_scanner_loop())
 
 
 # =====================================================================
@@ -810,7 +805,7 @@ def extract_uid(request: Request) -> int:
 @app.get("/health")
 @app.head("/")
 async def health():
-    return {"status": "ok", "db": "postgres" if pg_pool else "sqlite"}
+    return {"status": "ok", "bot": BOT_USERNAME_CACHE, "db": "postgres" if pg_pool else "sqlite"}
 
 
 @app.get("/api/state")
@@ -947,7 +942,7 @@ async def api_push_external_lots(request: Request, x_worker_secret: Optional[str
 
 
 # =====================================================================
-# 7. WEBAPP ИНТЕРФЕЙС (ПОИСК + PULL-TO-REFRESH + РЕФЕРАЛКА + ОФЕРТА РФ)
+# 7. ИНТЕРФЕЙС (LIQUID GLASS, ДИНАМИЧЕСКИЙ РЕФЕРАЛ, ПОИСК, СВАЙП)
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
@@ -995,13 +990,10 @@ async def serve_ui():
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .spin { animation: spin 0.8s linear infinite; }
 
-    /* Pull-to-refresh индикатор */
     .ptr-bar { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--accent); transition: height 0.18s ease; background: var(--glass-pill); }
-
     .glass-card { background: var(--glass-card); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid var(--glass-border); border-radius: 24px; padding: 16px; margin-bottom: 12px; }
     .top-header { position: sticky; top: 0; z-index: 20; background: var(--glass-dock); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); border-bottom: 1px solid var(--glass-stroke); padding: 12px 16px; }
-    
-    /* Живой поиск */
+
     .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 6px; }
     .search-input { width: 100%; height: 38px; padding: 0 34px 0 34px; border-radius: 13px; background: var(--glass-pill); border: 1px solid var(--glass-stroke); color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none; }
     .search-input:focus { border-color: var(--accent); }
@@ -1132,7 +1124,7 @@ async def serve_ui():
       }
     }, 1000);
 
-    // СВАЙП ВНИЗ (PULL-TO-REFRESH)
+    // СВАЙП ВНИЗ ДЛЯ ОБНОВЛЕНИЯ (PULL-TO-REFRESH)
     let touchStartY = 0;
     let pullDist = 0;
     window.addEventListener('touchstart', (e) => {
@@ -1152,7 +1144,7 @@ async def serve_ui():
         const txt = document.getElementById('ptr-text');
         if (bar) {
           bar.style.height = Math.min(54, pullDist * 0.45) + 'px';
-          if (txt) txt.textContent = pullDist > 95 ? 'Отпустите для обновления радара...' : 'Потяните вниз для обновления...';
+          if (txt) txt.textContent = pullDist > 95 ? 'Отпустите для обновления...' : 'Потяните вниз для обновления...';
         }
       }
     }, { passive: true });
@@ -1185,6 +1177,14 @@ async def serve_ui():
         const res = await fetch(`/api/state?ref=${refClean}`, { headers: apiHeaders() });
         const data = await res.json();
         state.user = data.user;
+        
+        // Исправление реферальной ссылки: берем актуальный юзернейм от сервера
+        if (data.user.refLink) {
+          state.user.refLink = data.user.refLink;
+        } else if (data.user.botUsername) {
+          state.user.refLink = `https://t.me/${data.user.botUsername}?start=ref_${CURRENT_UID}`;
+        }
+        
         state.monitors = data.monitors || [];
         await loadFeed();
       } catch (e) {
@@ -1402,7 +1402,6 @@ async def serve_ui():
     function render() {
       const app = document.getElementById('app');
 
-      // Детальная карточка лота
       if (state.detailId) {
         const item = state.listings.find(x => x.id === state.detailId);
         if (item) {
@@ -1450,7 +1449,6 @@ async def serve_ui():
         </div>
       `;
 
-      // ВКЛАДКА 1: НАХОДКИ + ЖИВОЙ ПОИСК + ОБНОВЛЕНИЕ
       if (state.tab === 'feed') {
         contentHtml = `
           <div class="top-header">
@@ -1475,7 +1473,6 @@ async def serve_ui():
               </div>
             </div>
 
-            <!-- ЖИВАЯ ПОИСКОВАЯ СТРОКА -->
             <div class="search-wrap">
               <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
               <input
@@ -1510,7 +1507,6 @@ async def serve_ui():
         `;
       }
 
-      // ВКЛАДКА 2: МОНИТОРЫ
       if (state.tab === 'monitors') {
         contentHtml = `
           <div class="top-header row-between">
@@ -1545,7 +1541,6 @@ async def serve_ui():
         `;
       }
 
-      // ВКЛАДКА 3: ИЗБРАННОЕ
       if (state.tab === 'saved') {
         const savedList = state.listings.filter(x => state.user.savedIds.includes(x.id));
         contentHtml = `
@@ -1559,7 +1554,6 @@ async def serve_ui():
         `;
       }
 
-      // ВКЛАДКА 4: ПРОФИЛЬ + РЕФЕРАЛЬНАЯ ПРОГРАММА + ПРАВОВОЙ БЛОК РФ
       if (state.tab === 'profile') {
         contentHtml = `
           <div class="top-header row-between">
@@ -1567,7 +1561,6 @@ async def serve_ui():
             ${timerBadgeHtml}
           </div>
           <div class="screen-content">
-            <!-- Карточка подписки -->
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:12px;">
                 <div>
@@ -1595,7 +1588,6 @@ async def serve_ui():
               </button>
             </div>
 
-            <!-- РЕФЕРАЛЬНАЯ ПРОГРАММА (ВЕЧНОЕ ХРАНЕНИЕ В БД) -->
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:8px;">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -1636,7 +1628,6 @@ async def serve_ui():
               </div>
             </div>
 
-            <!-- Юридический блок РФ -->
             <div class="glass-card">
               <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация (РФ)</div>
               <div style="display:flex; flex-direction:column; gap:8px;">
@@ -1658,7 +1649,6 @@ async def serve_ui():
         `;
       }
 
-      // МОДАЛКИ
       let modalHtml = '';
       if (!state.user.trialClaimed) {
         modalHtml = `
