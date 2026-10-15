@@ -1,8 +1,4 @@
 fastapi
 uvicorn
 aiogram
-httpx
-curl_cffi
 pydantic
-beautifulsoup4
-asyncpg
