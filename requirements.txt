@@ -2,3 +2,5 @@ fastapi
 uvicorn
 aiogram
 pydantic
+httpx
+asyncpg
