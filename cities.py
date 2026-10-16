@@ -1,0 +1,22 @@
+# Название города -> slug на Avito. Slug'и нужно один раз проверить воркером (см. worker.py --check-cities).
+CITIES = {
+    "Москва": "moskva", "Санкт-Петербург": "sankt-peterburg", "Екатеринбург": "ekaterinburg",
+    "Казань": "kazan", "Новосибирск": "novosibirsk", "Краснодар": "krasnodar",
+    "Нижний Новгород": "nizhniy_novgorod", "Челябинск": "chelyabinsk", "Самара": "samara",
+    "Уфа": "ufa", "Ростов-на-Дону": "rostov-na-donu", "Омск": "omsk", "Красноярск": "krasnoyarsk",
+    "Воронеж": "voronezh", "Пермь": "perm", "Волгоград": "volgograd", "Саратов": "saratov",
+    "Тюмень": "tyumen", "Тольятти": "tolyatti", "Ижевск": "izhevsk", "Барнаул": "barnaul",
+    "Ульяновск": "ulyanovsk", "Иркутск": "irkutsk", "Хабаровск": "habarovsk",
+    "Ярославль": "yaroslavl", "Владивосток": "vladivostok", "Махачкала": "mahachkala",
+    "Томск": "tomsk", "Оренбург": "orenburg", "Кемерово": "kemerovo", "Новокузнецк": "novokuznetsk",
+    "Рязань": "ryazan", "Астрахань": "astrahan", "Набережные Челны": "naberezhnye_chelny",
+    "Пенза": "penza", "Липецк": "lipetsk", "Киров": "kirov", "Чебоксары": "cheboksary",
+    "Тула": "tula", "Калининград": "kaliningrad", "Курск": "kursk", "Ставрополь": "stavropol",
+    "Сочи": "sochi", "Тверь": "tver", "Магнитогорск": "magnitogorsk", "Иваново": "ivanovo",
+    "Брянск": "bryansk", "Белгород": "belgorod", "Сургут": "surgut", "Владимир": "vladimir",
+    "Архангельск": "arhangelsk", "Чита": "chita", "Калуга": "kaluga", "Смоленск": "smolensk",
+    "Череповец": "cherepovets", "Саранск": "saransk", "Вологда": "vologda", "Орёл": "orel",
+    "Мурманск": "murmansk", "Якутск": "yakutsk", "Петрозаводск": "petrozavodsk",
+    "Тамбов": "tambov", "Сыктывкар": "syktyvkar", "Кострома": "kostroma",
+    "Симферополь": "simferopol", "Севастополь": "sevastopol", "Вся Россия": "rossiya",
+}
