@@ -9,7 +9,7 @@ import logging
 import asyncio
 from collections import OrderedDict
 from typing import Optional, List, Dict, Any, Tuple, Literal
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote, parse_qsl, urlparse
 
 import httpx
@@ -43,7 +43,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").str
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_SECRET = os.getenv("WORKER_SECRET", "").strip()
 WB_PROXY_URL = os.getenv("WB_PROXY_URL", "").strip() or None
-SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL", "").strip()  # Напр. "@my_channel"
+SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL", "").strip()
 ADMIN_UID = int(os.getenv("ADMIN_UID", "0")) if os.getenv("ADMIN_UID", "").isdigit() else 0
 PORT = int(os.getenv("PORT", 10000))
 
@@ -78,7 +78,6 @@ ALLOWED_HOSTS = {
     "avito.ru",
 }
 
-# Стоп-слова для жесткого отсечения аксессуаров, чехлов и запчастей
 ACCESSORY_STOP_WORDS = (
     "чехол", "стекло", "пленка", "плёнка", "кабель", "провод", "переходник",
     "адаптер", "зарядка", "зарядное", "держатель", "ремешок", "наклейка",
@@ -88,7 +87,7 @@ ACCESSORY_STOP_WORDS = (
     "амбушюры", "футляр", "кейс для", "шнурок", "кулер для", "сумка для",
 )
 
-app = FastAPI(title="DealHunter v6.0 Production")
+app = FastAPI(title="DealHunter v6.1 Production")
 
 app.add_middleware(
     CORSMiddleware,
@@ -102,6 +101,7 @@ bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
 pg_pool: Optional[asyncpg.Pool] = None
 background_leader_conn: Optional[asyncpg.Connection] = None
+leader_task: Optional[asyncio.Task] = None
 
 # =====================================================================
 # 2. RATE LIMITER И ОГРАНИЧЕННЫЙ LRU-КЭШ (ЗАЩИТА ПАМЯТИ)
@@ -161,7 +161,6 @@ def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
     if not received_hash:
         raise HTTPException(status_code=401, detail="Отсутствует криптографическая подпись")
 
-    # Строгая обязательная проверка auth_date
     auth_date_raw = data_dict.get("auth_date", "")
     if not auth_date_raw or not auth_date_raw.isdigit():
         raise HTTPException(status_code=401, detail="Отсутствует метка времени сессии (auth_date)")
@@ -221,7 +220,6 @@ async def get_authenticated_user(request: Request) -> Dict[str, Any]:
 # 4. БЕЗОПАСНАЯ РАБОТА С URL И ФОРМАТИРОВАНИЕМ ВРЕМЕНИ
 # =====================================================================
 def validate_and_clean_url(raw_url: str) -> str:
-    """Строгий разбор URL через urlparse: никаких кавычек, пробелов или чужих доменов."""
     u = str(raw_url or "").strip()
     if not u or any(ch in u for ch in ("'", '"', "<", ">", " ", "\n", "\r", "\t", "javascript:")):
         raise ValueError("URL содержит недопустимые символы")
@@ -334,7 +332,6 @@ async def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
-            # Безопасные миграции для старой схемы
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_rewarded BOOLEAN DEFAULT FALSE;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
@@ -342,13 +339,12 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0;")
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
-        logger.info("PostgreSQL схема v6.0 успешно инициализирована.")
+        logger.info("PostgreSQL инициализирован.")
     except Exception as e:
         logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
 
 
 async def check_sponsor_membership(uid: int) -> bool:
-    """Если задан SPONSOR_CHANNEL, проверяет подписку пользователя на канал."""
     if not SPONSOR_CHANNEL or not bot:
         return True
     try:
@@ -426,10 +422,6 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
 
 
 async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
-    """
-    Активирует 3 бесплатных дня PRO.
-    Проверяет подписку на спонсора (если задан SPONSOR_CHANNEL) и месячный лимит реферера (макс. 30 дней/мес).
-    """
     if SPONSOR_CHANNEL:
         is_member = await check_sponsor_membership(uid)
         if not is_member:
@@ -537,7 +529,6 @@ DEFAULT_QUERIES_BY_CATEGORY = {
 
 
 def is_accessory_or_junk(title: str, query_text: str) -> bool:
-    """Отсекает чехлы, защитные стекла и аксессуары, если пользователь сам их не ищет."""
     t_low = title.lower()
     q_low = query_text.lower()
     for stop_w in ACCESSORY_STOP_WORDS:
@@ -547,10 +538,6 @@ def is_accessory_or_junk(title: str, query_text: str) -> bool:
 
 
 def extract_model_cluster_key(title: str) -> str:
-    """
-    Выделяет сигнатуру объема памяти (напр. 128gb, 256gb, 512gb, 1tb) и модификации (pro, max, plus, ultra),
-    чтобы сравнивать цены только однотипных комплектаций между собой.
-    """
     t_low = title.lower().replace("гб", "gb").replace("тб", "tb")
     mem_match = re.search(r"\b(64|128|256|512|1024)\s*gb\b|\b(1|2)\s*tb\b", t_low)
     mem_key = mem_match.group(0).replace(" ", "") if mem_match else "std"
@@ -615,7 +602,6 @@ async def fetch_wb_clustered(query_text: str, city: str = "Москва") -> Lis
         sale_u = p.get("salePriceU") or p.get("priceU") or 0
         return int(sale_u / 100), qty
 
-    # 1. Первичная очистка от отсутствующих товаров и явных аксессуаров/чехлов
     candidates = []
     for p in products:
         pid = p.get("id")
@@ -634,16 +620,14 @@ async def fetch_wb_clustered(query_text: str, city: str = "Москва") -> Lis
     if len(candidates) < 4:
         return []
 
-    # 2. Отсечение ценовых выбросов снизу (например, чехол без слова «чехол» за 500 ₽ среди телефонов за 50 000 ₽)
     all_prices_sorted = sorted(c[0] for c in candidates)
     q75_price = all_prices_sorted[int(len(all_prices_sorted) * 0.75)]
-    min_ realistic_price = int(q75_price * 0.35) if q75_price > 5000 else 300
+    min_realistic_price = int(q75_price * 0.35) if q75_price > 5000 else 300
     filtered_candidates = [c for c in candidates if c[0] >= min_realistic_price]
 
     if len(filtered_candidates) < 4:
         filtered_candidates = candidates
 
-    # 3. Кластеризация по модификации и объему памяти (сравниваем только одинаковые модели!)
     clusters: Dict[str, List[int]] = {}
     for price_rub, full_title, _ in filtered_candidates:
         ckey = extract_model_cluster_key(full_title)
@@ -658,7 +642,6 @@ async def fetch_wb_clustered(query_text: str, city: str = "Москва") -> Lis
         ckey = extract_model_cluster_key(full_title)
         cluster_prices = sorted(clusters.get(ckey, []))
 
-        # Требуем минимум 3 однотипных позиции в кластере для точной медианы кластера, иначе общая медиана очищенной выборки
         if len(cluster_prices) >= 3:
             ref_median = cluster_prices[len(cluster_prices) // 2]
             sample_size = len(cluster_prices)
@@ -669,7 +652,6 @@ async def fetch_wb_clustered(query_text: str, city: str = "Москва") -> Lis
         if ref_median <= 0:
             continue
 
-        # Отсекаем аномалии (>65% отклонения почти всегда означает другой товар/комплектацию)
         if price_rub < ref_median:
             diff_rub = ref_median - price_rub
             diff_pct = round((diff_rub / ref_median) * 100, 1)
@@ -721,7 +703,6 @@ async def fetch_db_external_lots(
     city: str = "Москва",
     search_query: str = "",
 ) -> Tuple[bool, List[Dict[str, Any]]]:
-    """Читает свежие лоты из таблицы dh_lots в PostgreSQL (не старше 6 часов) и считает живой timeAgo."""
     if not pg_pool:
         return False, []
     async with pg_pool.acquire() as conn:
@@ -810,13 +791,11 @@ async def monitor_scanner_loop():
                 continue
 
             async with pg_pool.acquire() as conn:
-                # Ежедневное обнуление счетчика found_today при смене календарных суток
                 await conn.execute("""
                     UPDATE dh_monitors
                     SET found_today = 0, found_date = CURRENT_DATE
                     WHERE found_date < CURRENT_DATE
                 """)
-                # Очистка старой истории дедупликации мониторов (старше 7 дней)
                 await conn.execute("""
                     DELETE FROM dh_monitor_hits
                     WHERE notified_at < NOW() - INTERVAL '7 days'
@@ -904,6 +883,8 @@ async def monitor_scanner_loop():
                             logger.warning(f"Ошибка отправки пуша монитора {m['id']}: {e}")
 
                 await asyncio.sleep(1.5)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             logger.exception(f"Ошибка цикла сканера мониторов: {e}")
 
@@ -975,7 +956,6 @@ async def on_successful_payment(message: types.Message):
     amount = sp.total_amount
     payload = sp.invoice_payload
 
-    # 3 попытки зачисления в БД с паузой
     last_error = None
     for attempt in range(3):
         try:
@@ -1014,7 +994,6 @@ async def on_successful_payment(message: types.Message):
             logger.error(f"Попытка {attempt + 1}/3 зачисления платежа {charge_id} не удалась: {e}")
             await asyncio.sleep(1.5)
 
-    # Если все 3 попытки записи в БД упали — делаем автоматический возврат Stars пользователю!
     logger.critical(f"КРИТИЧЕСКИЙ СБОЙ ОПЛАТЫ {charge_id} для {uid}: {last_error}. Выполняю возврат Stars.")
     try:
         await bot.refund_star_payment(user_id=uid, telegram_payment_charge_id=charge_id)
@@ -1035,7 +1014,6 @@ async def on_successful_payment(message: types.Message):
 
 @dp.message(Command("refund"))
 async def cmd_admin_refund(message: types.Message, command: Optional[CommandObject] = None):
-    """Команда возврата звезд для администратора: /refund <user_id> <charge_id>"""
     if not ADMIN_UID or message.from_user.id != ADMIN_UID:
         return
     args = (command.args or "").split() if command else []
@@ -1055,10 +1033,6 @@ async def cmd_admin_refund(message: types.Message, command: Optional[CommandObje
 
 
 async def single_leader_background_manager():
-    """
-    Использует PostgreSQL Advisory Lock, чтобы при нескольких воркерах uvicorn
-    только ОДИН процесс запускал Telegram Polling и сканер мониторов!
-    """
     global BOT_USERNAME_CACHE, background_leader_conn
     await asyncio.sleep(2)
     while True:
@@ -1073,7 +1047,7 @@ async def single_leader_background_manager():
                 "SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_ID
             )
             if locked:
-                logger.info("Процесс получил статус лидера (Advisory Lock). Запуск бота и сканера.")
+                logger.info("Лидер получен: запуск бота и сканера.")
                 scanner_task = asyncio.create_task(monitor_scanner_loop())
                 try:
                     if bot:
@@ -1088,6 +1062,8 @@ async def single_leader_background_manager():
                     scanner_task.cancel()
             else:
                 await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             logger.warning(f"Перезапуск координатора фоновых задач через 5 сек: {e}")
             await asyncio.sleep(5)
@@ -1095,8 +1071,31 @@ async def single_leader_background_manager():
 
 @app.on_event("startup")
 async def on_startup():
+    global leader_task
     await init_db()
-    asyncio.create_task(single_leader_background_manager())
+    leader_task = asyncio.create_task(single_leader_background_manager())
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    global leader_task, background_leader_conn, pg_pool
+    if leader_task:
+        leader_task.cancel()
+    if bot:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+    if background_leader_conn and pg_pool:
+        try:
+            await pg_pool.release(background_leader_conn)
+        except Exception:
+            pass
+    if pg_pool:
+        try:
+            await pg_pool.close()
+        except Exception:
+            pass
 
 
 # =====================================================================
@@ -1634,7 +1633,6 @@ async def serve_minimalist_ui():
       if (profEl) profEl.textContent = formatCountdown(diff);
     }, 1000);
 
-    // Pull-to-refresh
     let startY = 0;
     let pull = 0;
     window.addEventListener('touchstart', (e) => {
@@ -1824,7 +1822,6 @@ async def serve_minimalist_ui():
       }
     }
 
-    // ЕДИНЫЙ БЕЗОПАСНЫЙ ДЕЛЕГАТ СОБЫТИЙ (БЕЗ INLINE ONCLICK И XSS)
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
