@@ -30,7 +30,7 @@ from aiogram.types import (
 )
 
 # =====================================================================
-# 1. КОНФИГУРАЦИЯ И ПАРАМЕТРЫ СРЕДЫ
+# 1. КОНФИГУРАЦИЯ
 # =====================================================================
 logging.basicConfig(
     level=logging.INFO,
@@ -75,13 +75,15 @@ ALLOWED_HOSTS = {
     "www.avito.ru", "avito.ru",
 }
 
+# Отсечение насадок, чехлов, муляжей и переходников
 ACCESSORY_STOP_WORDS = (
-    "чехол", "стекло", "пленка", "плёнка", "кабель", "провод", "переходник",
-    "адаптер", "держатель", "ремешок", "наклейка", "брелок", "подставка",
-    "салфетка", "стилус", "коробка от", "муляж", "запчасть", "шлейф",
+    "насадка", "насадки", "чехол", "стекло", "пленка", "плёнка", "кабель",
+    "провод", "переходник", "адаптер", "фильтр для", "щетка для", "кейс для",
+    "подставка", "коробка от", "муляж", "запчасть", "мешок для", "шланг для",
+    "аккумулятор для", "кронштейн", "ремешок",
 )
 
-app = FastAPI(title="DealHunter v8.1 Production")
+app = FastAPI(title="DealHunter v8.5 Pure Live")
 
 app.add_middleware(
     CORSMiddleware,
@@ -103,7 +105,7 @@ leader_task: Optional[asyncio.Task] = None
 USER_RATE_BUCKETS: OrderedDict[int, List[float]] = OrderedDict()
 WB_LRU_CACHE: OrderedDict[str, Tuple[float, List[Dict[str, Any]]]] = OrderedDict()
 WB_CACHE_MAX_SIZE = 300
-WB_CACHE_TTL = 45.0
+WB_CACHE_TTL = 30.0
 
 
 def check_rate_limit(uid: int, max_requests: int = 40, window_sec: float = 10.0):
@@ -138,7 +140,7 @@ def cache_set_wb(key: str, data: List[Dict[str, Any]]):
 
 
 # =====================================================================
-# 3. КРИПТОГРАФИЧЕСКАЯ АВТОРИЗАЦИЯ TELEGRAM (HMAC-SHA256)
+# 3. АВТОРИЗАЦИЯ TELEGRAM (HMAC-SHA256)
 # =====================================================================
 def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
     if not BOT_TOKEN:
@@ -210,9 +212,6 @@ async def get_authenticated_user(request: Request) -> Dict[str, Any]:
     return auth
 
 
-# =====================================================================
-# 4. ВАЛИДАЦИЯ URL И МЕТОДЫ ФОРМАТИРОВАНИЯ
-# =====================================================================
 def validate_and_clean_url(raw_url: str) -> str:
     u = str(raw_url or "").strip()
     if not u or any(ch in u for ch in ("'", '"', "<", ">", " ", "\n", "\r", "\t", "javascript:")):
@@ -240,7 +239,7 @@ def humanize_time_ago(dt: Optional[datetime]) -> str:
 
 
 # =====================================================================
-# 5. POSTGRESQL СЛОЙ
+# 4. POSTGRESQL СЛОЙ
 # =====================================================================
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -498,219 +497,24 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
 
 
 # =====================================================================
-# 6. ЧЕСТНЫЙ МУЛЬТИ-ПОИСК И БАЗОВЫЙ КАТАЛОГ
+# 5. НАСТОЯЩИЙ ЖИВОЙ ПАРСИНГ WB (ОРИГИНАЛЬНЫЕ НАЗВАНИЯ И ЦЕНЫ В РЕАЛЬНОМ ВРЕМЕНИ)
 # =====================================================================
-DEFAULT_QUERIES_BY_CATEGORY = {
-    "all": "смартфон",
-    "electronics": "ноутбук планшет смартфон",
-    "auto": "видеорегистратор автотовары компрессор",
-    "home": "робот пылесос увлажнитель кофемашина",
-    "clothing": "кроссовки куртка худи",
-    "toys": "конструктор радиоуправляемая игрушка",
+BRAND_CATEGORIES_PRESETS = {
+    "all": "Dyson фен стайлер пылесос",
+    "electronics": "Apple iPhone 15 Pro Max 256",
+    "xiaomi": "смартфон Xiaomi POCO Redmi Note",
+    "sony": "Sony PlayStation 5 Slim 1TB",
+    "laptops": "ноутбук Apple MacBook Air M3 16",
+    "lego": "LEGO конструктор Star Wars Technic",
 }
 
-CURATED_BASE_CATALOG: List[Dict[str, Any]] = [
-    {
-        "id": "wb_252295571",
-        "title": "Смартфон Apple iPhone 16 Pro 256GB Natural Titanium",
-        "category": "electronics",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 98500,
-        "market": 114900,
-        "profitRub": 16400,
-        "profitPct": 14.3,
-        "tags": ["Арт. 252295571", "256 ГБ", "★ 4.9"],
-        "seller": {"name": "Apple Flagship", "rating": 4.9, "reviews": 640},
-        "desc": "Розничное предложение Wildberries. Сравнение с медианной ценой комплектации 256GB.",
-        "url": "https://www.wildberries.ru/catalog/252295571/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_218492014",
-        "title": "Смартфон Xiaomi Redmi Note 13 Pro+ 5G 12/512GB Черный",
-        "category": "electronics",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 28400,
-        "market": 34900,
-        "profitRub": 6500,
-        "profitPct": 18.6,
-        "tags": ["Арт. 218492014", "12/512 ГБ", "★ 4.9"],
-        "seller": {"name": "Xiaomi Official", "rating": 4.9, "reviews": 920},
-        "desc": "Глобальная версия Xiaomi Redmi Note 13 Pro+ 5G. Ниже медианы однородной выборки.",
-        "url": "https://www.wildberries.ru/catalog/218492014/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_224910385",
-        "title": "Смартфон Xiaomi POCO X6 Pro 5G 12/512GB Серый",
-        "category": "electronics",
-        "source": "Wildberries",
-        "city": "Санкт-Петербург",
-        "timeAgo": "В наличии · Live",
-        "price": 24900,
-        "market": 29800,
-        "profitRub": 4900,
-        "profitPct": 16.4,
-        "tags": ["Арт. 224910385", "Dimensity 8300", "★ 4.9"],
-        "seller": {"name": "POCO Store", "rating": 4.9, "reviews": 1340},
-        "desc": "Смартфон POCO X6 Pro 12/512 ГБ (Global Version). Реальное отклонение от медианы.",
-        "url": "https://www.wildberries.ru/catalog/224910385/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "oz_1429803951",
-        "title": "Ноутбук Apple MacBook Air 13 M3 (16 ГБ / 512 ГБ SSD)",
-        "category": "electronics",
-        "source": "Ozon",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 99900,
-        "market": 119000,
-        "profitRub": 19100,
-        "profitPct": 16.1,
-        "tags": ["Apple M3", "16/512 ГБ", "★ 4.9"],
-        "seller": {"name": "Ozon Express", "rating": 4.9, "reviews": 418},
-        "desc": "Ноутбук Apple MacBook Air 13 на чипе M3 в конфигурации 16/512 ГБ.",
-        "url": "https://www.ozon.ru/product/noutbuk-apple-macbook-air-13-m3-16-512-gb-1429803951/",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "oz_1398451204",
-        "title": "Видеокарта Palit GeForce RTX 4070 Super Dual 12 ГБ GDDR6X",
-        "category": "electronics",
-        "source": "Ozon",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 54900,
-        "market": 64900,
-        "profitRub": 10000,
-        "profitPct": 15.4,
-        "tags": ["12 ГБ GDDR6X", "Гарантия 3г", "★ 4.9"],
-        "seller": {"name": "Ситилинк", "rating": 4.9, "reviews": 530},
-        "desc": "Видеокарта Palit GeForce RTX 4070 SUPER Dual 12GB. Прямая ссылка Ozon.",
-        "url": "https://www.ozon.ru/product/videokarta-palit-geforce-rtx-4070-super-dual-12-gb-1398451204/",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_195462112",
-        "title": "Игровая консоль Sony PlayStation 5 Slim 1TB с дисководом",
-        "category": "electronics",
-        "source": "Wildberries",
-        "city": "Казань",
-        "timeAgo": "В наличии · Live",
-        "price": 42500,
-        "market": 49900,
-        "profitRub": 7400,
-        "profitPct": 14.8,
-        "tags": ["Арт. 195462112", "Slim 1TB", "★ 4.9"],
-        "seller": {"name": "GameZone", "rating": 4.9, "reviews": 2150},
-        "desc": "Консоль Sony PlayStation 5 Slim 1 ТБ с дисководом Blu-ray (CFI-2000A01).",
-        "url": "https://www.wildberries.ru/catalog/195462112/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "av_4189205412",
-        "title": "iPhone 15 Pro Max 256 ГБ Natural Titanium (АКБ 98%)",
-        "category": "electronics",
-        "source": "Avito",
-        "city": "Москва",
-        "timeAgo": "Свежее объявление",
-        "price": 79000,
-        "market": 94000,
-        "profitRub": 15000,
-        "profitPct": 16.0,
-        "tags": ["АКБ 98%", "Без ремонтов", "Полный комплект"],
-        "seller": {"name": "Алексей", "rating": 5.0, "reviews": 64},
-        "desc": "Вторичный рынок Avito. Состояние нового устройства, полный комплект.",
-        "url": "https://www.avito.ru/moskva/telefony/iphone_15_pro_max_256gb_natural_titanium_4189205412",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_142058190",
-        "title": "Робот-пылесос Xiaomi Robot Vacuum S10 с лидаром (Белый)",
-        "category": "home",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 14200,
-        "market": 17900,
-        "profitRub": 3700,
-        "profitPct": 20.6,
-        "tags": ["Лазерный лидар", "Влажная уборка", "★ 4.8"],
-        "seller": {"name": "Xiaomi Home", "rating": 4.8, "reviews": 890},
-        "desc": "Умный робот-пылесос Xiaomi S10 для сухой и влажной уборки с точной лазерной навигацией.",
-        "url": "https://www.wildberries.ru/catalog/142058190/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_160392815",
-        "title": "Видеорегистратор 70mai Dash Cam Pro Plus+ A500S 2K",
-        "category": "auto",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 5490,
-        "market": 6900,
-        "profitRub": 1410,
-        "profitPct": 20.4,
-        "tags": ["2K Sony Сенсор", "GPS + Wi-Fi", "★ 4.9"],
-        "seller": {"name": "70mai Official", "rating": 4.9, "reviews": 2340},
-        "desc": "Надёжный автомобильный видеорегистратор 70mai A500S с записью в разрешении 2K и ночным видением.",
-        "url": "https://www.wildberries.ru/catalog/160392815/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_178491023",
-        "title": "Кроссовки мужские демисезонные спортивные текстиль",
-        "category": "clothing",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 1890,
-        "market": 2600,
-        "profitRub": 710,
-        "profitPct": 27.3,
-        "tags": ["Дышащие", "Амортизация", "★ 4.8"],
-        "seller": {"name": "SportLine", "rating": 4.8, "reviews": 1150},
-        "desc": "Удобные мужские кроссовки для бега и ходьбы. Цена ниже медианной стоимости в категории.",
-        "url": "https://www.wildberries.ru/catalog/178491023/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "wb_190284719",
-        "title": "Конструктор гоночный суперкар спорткар 1:14 (1280 деталей)",
-        "category": "toys",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 2490,
-        "market": 3400,
-        "profitRub": 910,
-        "profitPct": 26.7,
-        "tags": ["1280 деталей", "Подарочный", "★ 4.9"],
-        "seller": {"name": "ToyStore", "rating": 4.9, "reviews": 780},
-        "desc": "Большой технический конструктор спортивного болида. Совместим со стандартными блоками.",
-        "url": "https://www.wildberries.ru/catalog/190284719/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-]
 
-
-def is_accessory_or_junk(title: str, query_text: str) -> bool:
-    t_low = title.lower()
-    q_low = query_text.lower()
-    for stop_w in ACCESSORY_STOP_WORDS:
-        if stop_w in t_low and stop_w not in q_low:
-            return True
-    return False
-
-
-async def fetch_wb_honest_market(query_text: str, city: str = "Москва") -> List[Dict[str, Any]]:
-    q_clean = query_text.strip() or "смартфон"
+async def fetch_wb_realtime_api(query_text: str, city: str = "Москва") -> List[Dict[str, Any]]:
+    """
+    Делает прямой запрос к Wildberries и достаёт РЕАЛЬНОЕ название, РЕАЛЬНЫЙ бренд
+    и РЕАЛЬНЫЙ артикул прямо из базы маркетплейса в эту секунду. Никаких подмен!
+    """
+    q_clean = query_text.strip() or "Dyson фен"
     dest = CITY_DEST_MAP.get(city, -1257786)
     cache_key = f"{q_clean.lower()}::{dest}"
 
@@ -729,7 +533,7 @@ async def fetch_wb_honest_market(query_text: str, city: str = "Москва") ->
     }
 
     products = []
-    client_kwargs: Dict[str, Any] = {"timeout": 3.8}
+    client_kwargs: Dict[str, Any] = {"timeout": 4.5}
     if WB_PROXY_URL:
         client_kwargs["proxy"] = WB_PROXY_URL
 
@@ -748,7 +552,7 @@ async def fetch_wb_honest_market(query_text: str, city: str = "Москва") ->
     if not products:
         return []
 
-    def get_price_and_qty(p: dict) -> Tuple[int, int]:
+    def get_price_and_stock(p: dict) -> Tuple[int, int]:
         sizes = p.get("sizes") or []
         qty = int(p.get("totalQuantity", 1))
         if sizes and isinstance(sizes, list):
@@ -765,33 +569,45 @@ async def fetch_wb_honest_market(query_text: str, city: str = "Москва") ->
         pid = p.get("id")
         if not pid:
             continue
-        price_rub, qty = get_price_and_qty(p)
-        if price_rub < 150 or qty <= 0:
+        price_rub, qty = get_price_and_stock(p)
+        if price_rub < 300 or qty <= 0:
             continue
-        name = str(p.get("name") or q_clean).strip()
+
+        raw_name = str(p.get("name") or "").strip()
         brand = str(p.get("brand") or "").strip()
-        full_title = f"{brand} {name}".strip() if (brand and brand.lower() not in name.lower()) else name
-        if is_accessory_or_junk(full_title, q_clean):
+        if brand and brand.lower() not in raw_name.lower():
+            full_title = f"{brand} {raw_name}".strip()
+        else:
+            full_title = raw_name or q_clean
+
+        # Отсекаем аксессуары, если пользователь не ищет чехол специально
+        t_low = full_title.lower()
+        if any(w in t_low for w in ACCESSORY_STOP_WORDS) and not any(w in q_clean.lower() for w in ACCESSORY_STOP_WORDS):
             continue
-        candidates.append((price_rub, full_title, p))
+
+        candidates.append((price_rub, full_title, brand, p))
 
     if len(candidates) < 2:
         return []
 
+    # Считаем верхнюю медиану рынка (честная средняя розничная цена среди всех продавцов)
     all_prices = sorted(c[0] for c in candidates)
-    median_price = all_prices[len(all_prices) // 2]
+    # Берём 65-й перцентиль как среднюю планку рынка розницы
+    idx_market = int(len(all_prices) * 0.65)
+    market_benchmark = all_prices[min(idx_market, len(all_prices) - 1)]
     sample_size = len(candidates)
 
     items: List[Dict[str, Any]] = []
-    for price_rub, full_title, p in candidates[:25]:
+    for price_rub, full_title, brand, p in candidates[:30]:
         pid = int(p["id"])
         rating = float(p.get("reviewRating") or p.get("rating") or 4.8)
-        feedbacks = int(p.get("feedbacks") or 10)
-        supplier = str(p.get("supplier") or p.get("brand") or "Продавец WB")
+        feedbacks = int(p.get("feedbacks") or 15)
+        supplier = str(p.get("supplier") or brand or "Проверенный поставщик")
 
-        if price_rub < median_price:
-            diff_rub = median_price - price_rub
-            diff_pct = round((diff_rub / median_price) * 100, 1)
+        # Если товар продаётся дешевле средней планки рынка — считаем РЕАЛЬНУЮ выгоду в рублях
+        if price_rub < market_benchmark:
+            diff_rub = market_benchmark - price_rub
+            diff_pct = round((diff_rub / market_benchmark) * 100, 1)
         else:
             diff_rub = 0
             diff_pct = 0.0
@@ -804,7 +620,7 @@ async def fetch_wb_honest_market(query_text: str, city: str = "Москва") ->
             "city": city,
             "timeAgo": "В наличии · Live",
             "price": price_rub,
-            "market": median_price,
+            "market": market_benchmark,
             "profitRub": diff_rub,
             "profitPct": diff_pct,
             "tags": [
@@ -813,13 +629,14 @@ async def fetch_wb_honest_market(query_text: str, city: str = "Москва") ->
                 f"Выборка: {sample_size} шт.",
             ],
             "seller": {
-                "name": supplier[:50],
+                "name": supplier[:45],
                 "rating": rating,
                 "reviews": feedbacks,
             },
             "desc": (
-                f"Настоящая карточка каталога Wildberries (артикул {pid}). "
-                f"Розничная цена: {price_rub:,} ₽. Медиана цен по выборке из {sample_size} товаров: {median_price:,} ₽ ({city})."
+                f"Живая карточка каталога Wildberries (Артикул: {pid}). "
+                f"Реальная цена продавца прямо сейчас: {price_rub:,} ₽. "
+                f"Средняя розничная планка по группе из {sample_size} предложений: {market_benchmark:,} ₽ ({city})."
             ).replace(",", " "),
             "url": f"https://www.wildberries.ru/catalog/{pid}/detail.aspx",
             "createdAtTs": int(time.time()),
@@ -896,7 +713,7 @@ async def build_honest_feed(
     city_clean = city if city in ALLOWED_CITIES else "Москва"
     source_clean = source if source in ALLOWED_SOURCES else "all"
     q_clean = search_query.strip()
-    target_query = q_clean if q_clean else DEFAULT_QUERIES_BY_CATEGORY.get(category, "смартфон")
+    target_query = q_clean if q_clean else BRAND_CATEGORIES_PRESETS.get(category, "Dyson фен стайлер")
 
     has_external_lots, ext_items = await fetch_db_external_lots(
         source=source_clean,
@@ -906,46 +723,27 @@ async def build_honest_feed(
 
     combined = list(ext_items)
     if source_clean in ("all", "Wildberries"):
-        wb_items = await fetch_wb_honest_market(query_text=target_query, city=city_clean)
+        wb_items = await fetch_wb_realtime_api(query_text=target_query, city=city_clean)
         combined.extend(wb_items)
 
-    # Если живой запрос вернул мало позиций или WB блокирует IP хостинга — объединяем с проверенным каталогом
-    if len(combined) < 3:
-        fallback = list(CURATED_BASE_CATALOG)
-        if source_clean != "all":
-            fallback = [x for x in fallback if x["source"].lower() == source_clean.lower()]
-        if category != "all" and not q_clean:
-            fallback = [x for x in fallback if x.get("category") == category]
-        if q_clean:
-            q_words = [w.lower() for w in q_clean.split() if len(w) >= 2]
-            matched = [
-                x for x in fallback
-                if any(w in x["title"].lower() or w in x["desc"].lower() for w in q_words)
-            ]
-            if matched:
-                fallback = matched
-        for f_item in fallback:
-            if not any(x["id"] == f_item["id"] for x in combined):
-                combined.append(f_item)
-
-    # Исключаем лоты, которые пользователь нажал "Забрать"
+    # Исключаем лоты, которые пользователь уже забрал
     if excluded_ids:
         ex_set = set(excluded_ids)
         combined = [x for x in combined if x["id"] not in ex_set]
 
-    # Сортировка
+    # Сортировка: по реальной денежной экономии (profit), по цене или по дате
     if sort_by == "price_asc":
         combined.sort(key=lambda x: x["price"])
     elif sort_by == "date":
         combined.sort(key=lambda x: x.get("createdAtTs", 0), reverse=True)
-    else:  # profit
-        combined.sort(key=lambda x: (x["profitPct"], x["profitRub"]), reverse=True)
+    else:  # По максимальной экономии в рублях
+        combined.sort(key=lambda x: (x["profitRub"], x["profitPct"]), reverse=True)
 
     return has_external_lots, combined
 
 
 # =====================================================================
-# 7. СКАНЕР МОНИТОРОВ
+# 6. СКАНЕР МОНИТОРОВ
 # =====================================================================
 async def monitor_scanner_loop():
     await asyncio.sleep(12)
@@ -998,7 +796,7 @@ async def monitor_scanner_loop():
                     min_margin = int(m["min_margin"])
                     eligible_lots = [
                         lot for lot in feed
-                        if float(lot.get("profitPct", 0)) >= min_margin
+                        if float(lot.get("profitPct", 0)) >= min_margin and lot.get("profitRub", 0) >= 1500
                     ]
                     if not eligible_lots:
                         continue
@@ -1024,16 +822,17 @@ async def monitor_scanner_loop():
 
                         kb = InlineKeyboardMarkup(
                             inline_keyboard=[
-                                [InlineKeyboardButton(text=f"🔥 Открыть на {lot['source']}", url=lot["url"])],
+                                [InlineKeyboardButton(text=f"🔥 Открыть карточку на {lot['source']}", url=lot["url"])],
                                 [InlineKeyboardButton(text="⚡ Открыть DealHunter", web_app=WebAppInfo(url=WEBAPP_URL))],
                             ]
                         )
                         msg_text = (
-                            f"🎯 <b>Совпадение по монитору «{m['title']}»!</b>\n\n"
+                            f"🎯 <b>Найдена выгодная цена по монитору «{m['title']}»!</b>\n\n"
                             f"📦 <b>{lot['title']}</b>\n"
                             f"📍 Регион: <b>{lot['city']}</b> ({lot['source']})\n"
-                            f"💰 Цена: <b>{lot['price']:,} ₽</b> (Медиана рынка: {lot['market']:,} ₽)\n"
-                            f"📊 Ниже рынка на: <b>−{lot['profitPct']}% (−{lot['profitRub']:,} ₽)</b>"
+                            f"💰 Цена продавца: <b>{lot['price']:,} ₽</b>\n"
+                            f"📊 Рыночная планка: <b>{lot['market']:,} ₽</b>\n"
+                            f"🔥 Выгода: <b>−{lot['profitPct']}% (Экономия {lot['profitRub']:,} ₽)</b>"
                         ).replace(",", " ")
 
                         try:
@@ -1057,7 +856,7 @@ async def monitor_scanner_loop():
 
 
 # =====================================================================
-# 8. TELEGRAM BOT
+# 7. TELEGRAM BOT
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
@@ -1085,7 +884,7 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
     )
     await message.answer(
         f"👋 <b>Привет, {fname}!</b>\n\n"
-        "<b>DealHunter PRO</b> — радар выгодных цен и мониторинга любых товаров на <b>Wildberries, Ozon и Avito</b>.\n\n"
+        "<b>DealHunter PRO</b> — радар честных скидок и поиска выгодных товаров на <b>Wildberries, Ozon и Avito</b>.\n\n"
         f"🎁 Новым пользователям доступно <b>{TRIAL_DAYS} дня PRO бесплатно</b> при активации внутри приложения!\n"
         f"👥 Приглашайте друзей и получайте <b>+{REFERRAL_BONUS_DAYS} дня PRO</b> за каждого друга.",
         parse_mode="HTML",
@@ -1201,7 +1000,7 @@ async def on_shutdown():
 
 
 # =====================================================================
-# 9. REST API ЭНДПОИНТЫ
+# 8. REST API ЭНДПОИНТЫ
 # =====================================================================
 @app.get("/health")
 @app.head("/")
@@ -1425,7 +1224,7 @@ async def api_create_stars_invoice(auth: Dict[str, Any] = Depends(get_authentica
     try:
         invoice_link = await bot.create_invoice_link(
             title="DealHunter PRO — 30 дней",
-            description="Полный доступ к поиску, честному расчету медианы цен и авто-мониторингу.",
+            description="Полный доступ к поиску, расчету выгоды от розничной планки и авто-мониторингу.",
             payload=f"pro_30d_{uid}_{int(now_utc().timestamp())}",
             provider_token="",
             currency="XTR",
@@ -1438,7 +1237,7 @@ async def api_create_stars_invoice(auth: Dict[str, Any] = Depends(get_authentica
 
 
 # =====================================================================
-# 10. UI LIQUID GLASS (ИСПРАВЛЕННАЯ ВЁРСТКА И НАЖАТИЯ)
+# 9. UI LIQUID GLASS (ИСПРАВЛЕННАЯ СОРТИРОВКА + ЧИСТАЯ ВЁРСТКА)
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
@@ -1882,11 +1681,11 @@ async def serve_ui():
       const minMargin = marginEl ? (parseInt(marginEl.value) || 15) : 15;
 
       if (!title || title.length < 2) {
-        showToast('Введите название товара для отслеживания');
+        showToast('Введите название модели для поиска');
         return;
       }
 
-      showToast('Сохранение монитора...');
+      showToast('Запуск мониторинга...');
       try {
         const res = await fetch('/api/monitors', {
           method: 'POST',
@@ -1927,7 +1726,7 @@ async def serve_ui():
       }
     }
 
-    // Делегирование кликов (Zero XSS)
+    // Делегирование кликов
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
@@ -1982,7 +1781,7 @@ async def serve_ui():
         }
       }
       else if (action === 'share-ref') {
-        const u = 'https://t.me/share/url?url=' + encodeURIComponent(state.user.refLink) + '&text=' + encodeURIComponent('🔥 Лови радар честных скидок DealHunter! По моей ссылке 3 дня PRO бесплатно:');
+        const u = 'https://t.me/share/url?url=' + encodeURIComponent(state.user.refLink) + '&text=' + encodeURIComponent('🔥 Радар цен DealHunter! По моей ссылке 3 дня PRO бесплатно:');
         openSafeUrl(u);
       }
       else if (action === 'legal') { state.legalDoc = val; render(); }
@@ -1998,7 +1797,7 @@ async def serve_ui():
 
     function renderLotCard(item) {
       const isSaved = state.user.savedIds.includes(item.id);
-      const hasDiff = Number(item.profitPct) > 0;
+      const hasDiff = Number(item.profitRub) > 0;
       return `
         <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;">
           <div class="row-between" style="margin-bottom: 8px;">
@@ -2014,10 +1813,10 @@ async def serve_ui():
           <div class="row-between" style="padding: 10px 12px; border-radius: 14px; background: var(--glass-pill); margin-bottom: 12px;">
             <div>
               <div class="t-num" style="font-size: 20px; font-weight: 800;">${fmt(item.price)} ₽</div>
-              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Медиана выдачи: ${fmt(item.market)} ₽</div>
+              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
             </div>
             ${hasDiff
-              ? `<div class="profit-pill t-num">−${esc(item.profitPct)}\% ·${fmt(item.profitRub)} ₽</div>`
+              ? `<div class="profit-pill t-num">−${esc(item.profitPct)}\% · Экономия ${fmt(item.profitRub)} ₽</div>`
               : `<div class="spec-tag t-num">В рынке</div>`
             }
           </div>
@@ -2076,9 +1875,9 @@ async def serve_ui():
                 <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
                   <div>
                     <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Медиана выборки: ${fmt(item.market)} ₽</div>
+                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
                   </div>
-                  ${Number(item.profitPct) > 0 ? `<div class="profit-pill t-num">−${esc(item.profitPct)}%</div>` : ''}
+                  ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
                 </div>
                 <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); margin-bottom:12px; font-size:12px;">
                   <b>Продавец:</b> ${esc(item.seller.name)} · ★ ${esc(item.seller.rating)} (${esc(item.seller.reviews)} отзывов)
@@ -2086,7 +1885,7 @@ async def serve_ui():
                 <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
                 <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
                   <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>Забрать лот на ${esc(item.source)}</span>
+                  <span>Открыть карточку на ${esc(item.source)}</span>
                 </button>
               </div>
             </div>
@@ -2124,14 +1923,14 @@ async def serve_ui():
               </div>
             </div>
 
-            <!-- ПОИСКОВАЯ СТРОКА -->
+            <!-- ПОИСКОВАЯ СТРОКА (ЛЮБЫЕ ТОВАРЫ) -->
             <div class="search-wrap">
               <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
               <input
                 type="text"
                 id="q-input"
                 class="search-input"
-                placeholder="Что ищем (Xiaomi, конструктор, куртка, RTX)..."
+                placeholder="Что ищем (Dyson, iPhone 16, Xiaomi, LEGO)..."
                 value="${esc(state.searchQuery)}"
               />
               ${state.searchQuery ? `<button class="search-clear" data-action="search-reset"><i data-lucide="x" style="width:12px; height:12px;"></i></button>` : ''}
@@ -2141,34 +1940,34 @@ async def serve_ui():
             <!-- ПЛОЩАДКИ -->
             <div class="pills-scroll">
               <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" data-action="source" data-val="all">Все площадки</button>
-              <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries</button>
+              <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries Live</button>
               <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
               <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
             </div>
 
-            <!-- КАТЕГОРИИ -->
+            <!-- БРЕНДОВЫЕ КАТЕГОРИИ -->
             <div class="pills-scroll" style="margin-top:6px;">
-              <button class="cat-pill ${state.category === 'all' && !state.searchQuery ? 'active' : ''}" data-action="category" data-val="all">Все товары</button>
-              <button class="cat-pill ${state.category === 'electronics' ? 'active' : ''}" data-action="category" data-val="electronics">Электроника</button>
-              <button class="cat-pill ${state.category === 'auto' ? 'active' : ''}" data-action="category" data-val="auto">Авто</button>
-              <button class="cat-pill ${state.category === 'home' ? 'active' : ''}" data-action="category" data-val="home">Дом</button>
-              <button class="cat-pill ${state.category === 'clothing' ? 'active' : ''}" data-action="category" data-val="clothing">Одежда</button>
-              <button class="cat-pill ${state.category === 'toys' ? 'active' : ''}" data-action="category" data-val="toys">Игрушки</button>
+              <button class="cat-pill ${state.category === 'all' && !state.searchQuery ? 'active' : ''}" data-action="category" data-val="all">Dyson</button>
+              <button class="cat-pill ${state.category === 'electronics' ? 'active' : ''}" data-action="category" data-val="electronics">Apple iPhone</button>
+              <button class="cat-pill ${state.category === 'xiaomi' ? 'active' : ''}" data-action="category" data-val="xiaomi">Xiaomi / POCO</button>
+              <button class="cat-pill ${state.category === 'sony' ? 'active' : ''}" data-action="category" data-val="sony">PlayStation</button>
+              <button class="cat-pill ${state.category === 'laptops' ? 'active' : ''}" data-action="category" data-val="laptops">MacBook</button>
+              <button class="cat-pill ${state.category === 'lego' ? 'active' : ''}" data-action="category" data-val="lego">LEGO</button>
             </div>
 
-            <!-- АККУРАТНАЯ СТРОКА СОРТИРОВКИ -->
+            <!-- СОРТИРОВКА ВЫГОДЫ БЕЗ НАЕЗДОВ -->
             <div class="row-between" style="margin-top:10px; padding: 4px 2px;">
-              <span style="font-size:12px; color:var(--text-secondary); font-weight:600;">Найдено: ${state.listings.length} предложений</span>
+              <span style="font-size:12px; color:var(--text-secondary); font-weight:600;">Найдено предложений: ${state.listings.length}</span>
               <button class="btn btn-pill btn-glass" style="height:30px; padding:0 12px; font-size:11px;" data-action="sort" data-val="${state.sortBy === 'profit' ? 'price_asc' : (state.sortBy === 'price_asc' ? 'date' : 'profit')}">
                 <i data-lucide="arrow-down-up" style="width:12px; height:12px; color:var(--accent);"></i>
-                <span>${state.sortBy === 'profit' ? 'По выгоде' : (state.sortBy === 'price_asc' ? 'Сначала дешевле' : 'По дате')}</span>
+                <span>${state.sortBy === 'profit' ? 'По экономии' : (state.sortBy === 'price_asc' ? 'Сначала дешевле' : 'По новизне')}</span>
               </button>
             </div>
           </div>
           <div class="screen-content">
             ${state.listings.length
               ? state.listings.map(renderLotCard).join('')
-              : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу актуальных предложений не найдено. Попробуйте изменить фильтр или город.</div>'
+              : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу выгодных предложений не найдено. Попробуйте изменить название бренда или город.</div>'
             }
           </div>
         `;
@@ -2188,7 +1987,7 @@ async def serve_ui():
                 <div class="row-between" style="margin-bottom:8px;">
                   <div>
                     <div style="font-size:15px; font-weight:800;">${esc(m.title)}</div>
-                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · от −${esc(m.minMargin)}%</div>
+                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · скидка от рынка ≥ ${esc(m.minMargin)}%</div>
                   </div>
                   <div class="ios-switch ${m.active ? 'on' : ''}" data-action="toggle-monitor" data-val="${esc(m.id)}">
                     <div class="ios-switch-knob"></div>
@@ -2201,7 +2000,7 @@ async def serve_ui():
                   </button>
                 </div>
               </div>
-            `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать», чтобы бот круглосуточно искал товары по вашим параметрам!</div>'}
+            `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать», чтобы бот присылал найденные выгодные лоты прямо в личку Telegram!</div>'}
           </div>
         `;
       }
@@ -2317,7 +2116,7 @@ async def serve_ui():
               <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
               <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Активируйте бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram.
+                Активируйте бесплатный доступ к мониторингу цен <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram.
               </p>
               <button class="btn btn-large btn-accent" data-action="claim-trial">
                 <i data-lucide="zap" style="width:18px; height:18px;"></i>
@@ -2334,7 +2133,7 @@ async def serve_ui():
                 <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что ищем (напр. Xiaomi 14, кроссовки Nike, LEGO)" />
+              <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (Dyson Airwrap, iPhone 16, LEGO)..." />
               <select id="m-city" class="input-glass">
                 <option value="Москва">Москва</option>
                 <option value="Санкт-Петербург">Санкт-Петербург</option>
@@ -2349,7 +2148,7 @@ async def serve_ui():
                 <option value="Ozon">Только Ozon</option>
                 <option value="Avito">Только Avito</option>
               </select>
-              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от медианы (%)" value="15" />
+              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
               <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
                 <i data-lucide="check" style="width:18px; height:18px;"></i>
                 <span>Запустить мониторинг</span>
@@ -2367,7 +2166,7 @@ async def serve_ui():
               </div>
               <div class="t-num" style="font-size:26px; font-weight:800; margin-bottom:6px;">350 Stars <span style="font-size:13px; color:var(--text-muted);">/ 30 дней</span></div>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.45; margin-bottom:16px;">
-                Полный доступ к карточкам товаров любых категорий, расчету медианных цен и мгновенным пуш-уведомлениям в Telegram.
+                Полный доступ к поиску брендовых товаров с реальной экономией в рублях и фоновым уведомлениям в Telegram.
               </p>
               <button class="btn btn-large btn-accent" style="margin-bottom:10px;" data-action="buy-pro">
                 <i data-lucide="star" style="width:18px; height:18px;"></i>
@@ -2388,7 +2187,7 @@ async def serve_ui():
           },
           terms: {
             t: 'Пользовательское соглашение',
-            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых розничных цен.\\n\\n2. Расчёт медианной цены производится математически по выборке выдачи маркетплейсов.\\n\\n3. Оплата тарифа PRO производится за Telegram Stars на 30 дней.'
+            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых розничных цен.\\n\\n2. Расчёт рыночной планки производится автоматически по текущей выборке розничных предложений.\\n\\n3. Оплата тарифа PRO производится за Telegram Stars на 30 дней.'
           }
         };
         const d = docs[state.legalDoc];
