@@ -1,1875 +1,1370 @@
 import os
+import re
+import hmac
 import json
-import random
-import sqlite3
+import time
+import base64
+import hashlib
+import html as htmllib
+import logging
 import asyncio
-from typing import Optional, List, Dict, Any
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple, Literal
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, parse_qsl, urlparse
 
 import httpx
-from fastapi import FastAPI, Request, Header, HTTPException
+import asyncpg
+from fastapi import FastAPI, Request, Header, HTTPException, Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, CommandObject
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
+from aiogram.filters import CommandStart, CommandObject, Command
 from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     WebAppInfo,
     LabeledPrice,
     PreCheckoutQuery,
-    MenuButtonWebApp,
 )
 
 # =====================================================================
 # 1. КОНФИГУРАЦИЯ
 # =====================================================================
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("dealhunter")
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip().rstrip("/")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
-PORT = int(os.getenv("PORT", 10000))
+WORKER_SECRET = os.getenv("WORKER_SECRET", "").strip()
+WB_PROXY_URL = os.getenv("WB_PROXY_URL", "").strip() or None
+SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL", "").strip()  # например "@my_channel"
+ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "").strip()  # например "@my_support"
+_admin_raw = os.getenv("ADMIN_UID", "").strip()
+ADMIN_UID = int(_admin_raw) if _admin_raw.isdigit() else 0
 
 BOT_USERNAME_DEFAULT = "DealHunterAvito_bot"
 BOT_USERNAME_CACHE = os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lstrip("@") or BOT_USERNAME_DEFAULT
+BUNNY_STARS_URL = os.getenv("BUNNY_STARS_URL", "https://t.me/BunnyStarsBot?startapp=ref_5123484212").strip()
 
 STARS_PRICE = 350
-BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
+TRIAL_DAYS = 3
+REFERRAL_BONUS_DAYS = 3
+MAX_REF_DAYS_PER_MONTH = 30
+LOT_TTL_HOURS = 6
+MAX_SAVED = 100
+MAX_MONITORS = 15
+REFRESH_SEC = 60
+ADVISORY_LOCK_ID = 94827165
 
-app = FastAPI(title="DealHunter PRO v4.0 Bulletproof")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+CITY_DEST_MAP: Dict[str, int] = {
+    "Москва": -1257786,
+    "Санкт-Петербург": -1198055,
+    "Екатеринбург": -5818883,
+    "Казань": -2133462,
+    "Новосибирск": -364763,
+    "Краснодар": -1075831,
+}
+ALLOWED_CITIES = set(CITY_DEST_MAP.keys())
+ALLOWED_SOURCES = {"all", "Wildberries", "Ozon", "Avito"}
+SOURCE_HOSTS: Dict[str, set] = {
+    "Wildberries": {"www.wildberries.ru", "wildberries.ru"},
+    "Ozon": {"www.ozon.ru", "ozon.ru"},
+    "Avito": {"www.avito.ru", "avito.ru"},
+}
+
+# Аксессуары, восстановленные, витринные и копии: исключаем, если пользователь сам их не ищет
+ACCESSORY_STOP_WORDS = (
+    "чехол", "стекло", "пленка", "плёнка", "кабель", "провод", "переходник",
+    "адаптер", "зарядка", "зарядное", "держатель", "ремешок", "наклейка",
+    "брелок", "подставка", "салфетка", "стилус", "коробка от", "муляж",
+    "запчасть", "шлейф", "дисплей для", "экран для", "аккумулятор для",
+    "батарея для", "корпус для", "крышка для", "линза", "защита камеры",
+    "амбушюры", "футляр", "кейс для", "шнурок", "кулер для", "сумка для",
+    "восстановлен", "refurbished", "витрин", "копия", "реплика",
+    "для iphone", "для xiaomi", "для macbook", "для samsung", "чехол-книжка",
 )
+
+DEFAULT_QUERIES_BY_CATEGORY = {
+    "all": "смартфон Xiaomi Redmi Note",
+    "xiaomi": "смартфон Xiaomi POCO",
+    "iphone": "смартфон Apple iPhone 15",
+    "macbook": "ноутбук Apple MacBook Air",
+    "gpu": "видеокарта GeForce RTX 4060",
+    "ps5": "игровая консоль PlayStation 5 Slim",
+}
 
 bot = Bot(token=BOT_TOKEN) if BOT_TOKEN else None
 dp = Dispatcher()
-
-# =====================================================================
-# 2. НАДЕЖНАЯ БАЗА ДАННЫХ (PostgreSQL Cloud / локальный SQLite)
-# =====================================================================
-pg_pool = None
-sqlite_conn = None
+pg_pool: Optional[asyncpg.Pool] = None
+background_leader_conn: Optional[asyncpg.Connection] = None
+background_task: Optional[asyncio.Task] = None
 
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def init_db():
-    global pg_pool, sqlite_conn
-    if DATABASE_URL.startswith("postgres"):
-        try:
-            import asyncpg
-            pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, command_timeout=15)
-            async with pg_pool.acquire() as conn:
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS dh_users (
-                        user_id BIGINT PRIMARY KEY,
-                        first_name TEXT DEFAULT 'Охотник',
-                        username TEXT DEFAULT '',
-                        trial_claimed BOOLEAN DEFAULT FALSE,
-                        sub_until TIMESTAMPTZ,
-                        saved_ids TEXT DEFAULT '[]',
-                        referred_by BIGINT DEFAULT NULL,
-                        ref_count INT DEFAULT 0,
-                        ref_days_earned INT DEFAULT 0,
-                        created_at TIMESTAMPTZ DEFAULT NOW()
-                    );
-                    CREATE TABLE IF NOT EXISTS dh_monitors (
-                        id TEXT PRIMARY KEY,
-                        user_id BIGINT NOT NULL,
-                        title TEXT NOT NULL,
-                        city TEXT DEFAULT 'Москва',
-                        source TEXT DEFAULT 'all',
-                        min_margin INT DEFAULT 15,
-                        active BOOLEAN DEFAULT TRUE,
-                        found_today INT DEFAULT 0,
-                        last_notified_lot TEXT DEFAULT '',
-                        created_at TIMESTAMPTZ DEFAULT NOW()
-                    );
-                """)
-                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
-                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
-                await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0;")
-                return
-        except Exception as e:
-            print(f"[DB Warning] Ошибка PostgreSQL, переключаюсь на SQLite: {e}")
-            pg_pool = None
-
-    sqlite_conn = sqlite3.connect("dealhunter.db", check_same_thread=False)
-    sqlite_conn.row_factory = sqlite3.Row
-    cur = sqlite_conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS dh_users (
-            user_id INTEGER PRIMARY KEY,
-            first_name TEXT DEFAULT 'Охотник',
-            username TEXT DEFAULT '',
-            trial_claimed INTEGER DEFAULT 0,
-            sub_until TEXT,
-            saved_ids TEXT DEFAULT '[]',
-            referred_by INTEGER DEFAULT NULL,
-            ref_count INTEGER DEFAULT 0,
-            ref_days_earned INTEGER DEFAULT 0,
-            created_at TEXT
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS dh_monitors (
-            id TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            city TEXT DEFAULT 'Москва',
-            source TEXT DEFAULT 'all',
-            min_margin INTEGER DEFAULT 15,
-            active INTEGER DEFAULT 1,
-            found_today INTEGER DEFAULT 0,
-            last_notified_lot TEXT DEFAULT '',
-            created_at TEXT
-        )
-    """)
-    for col_sql in [
-        "ALTER TABLE dh_users ADD COLUMN referred_by INTEGER DEFAULT NULL",
-        "ALTER TABLE dh_users ADD COLUMN ref_count INTEGER DEFAULT 0",
-        "ALTER TABLE dh_users ADD COLUMN ref_days_earned INTEGER DEFAULT 0",
-    ]:
-        try:
-            cur.execute(col_sql)
-        except Exception:
-            pass
-    sqlite_conn.commit()
+# =====================================================================
+# 2. RATE LIMIT И КЭШ
+# =====================================================================
+USER_RATE_BUCKETS: "OrderedDict[int, List[float]]" = OrderedDict()
+WB_LRU_CACHE: "OrderedDict[str, Tuple[float, List[Dict[str, Any]], bool]]" = OrderedDict()
+WB_CACHE_MAX_SIZE = 200
+WB_CACHE_TTL_OK = 60.0
+WB_CACHE_TTL_EMPTY = 10.0
 
 
-async def get_or_create_user(
-    uid: int,
-    first_name: str = "Охотник",
-    username: str = "",
-    referrer_id: Optional[int] = None,
-) -> Dict[str, Any]:
-    global BOT_USERNAME_CACHE
-    now = now_utc()
-    should_reward_ref = False
+def check_rate_limit(uid: int, max_requests: int = 25, window_sec: float = 10.0):
+    now = time.time()
+    stamps = [t for t in USER_RATE_BUCKETS.get(uid, []) if now - t < window_sec]
+    if len(stamps) >= max_requests:
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Подождите несколько секунд.")
+    stamps.append(now)
+    USER_RATE_BUCKETS[uid] = stamps
+    USER_RATE_BUCKETS.move_to_end(uid)
+    while len(USER_RATE_BUCKETS) > 2000:
+        USER_RATE_BUCKETS.popitem(last=False)
 
-    valid_ref = None
-    if referrer_id is not None:
-        try:
-            r_int = int(referrer_id)
-            if r_int != int(uid) and r_int > 0:
-                valid_ref = r_int
-        except Exception:
-            pass
 
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
-            if not row:
-                initial_sub = now + timedelta(days=3)
-                if valid_ref:
-                    should_reward_ref = True
-                await conn.execute(
-                    """INSERT INTO dh_users 
-                       (user_id, first_name, username, trial_claimed, sub_until, saved_ids, referred_by, ref_count, ref_days_earned)
-                       VALUES ($1, $2, $3, FALSE, $4, '[]', $5, 0, 0)""",
-                    uid, first_name, username, initial_sub, valid_ref
-                )
-                row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
-            else:
-                if row["sub_until"] is None and not row["trial_claimed"]:
-                    initial_sub = now + timedelta(days=3)
-                    await conn.execute("UPDATE dh_users SET sub_until = $2 WHERE user_id = $1", uid, initial_sub)
-                    row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
+def cache_get_wb(key: str) -> Optional[Tuple[List[Dict[str, Any]], bool]]:
+    entry = WB_LRU_CACHE.get(key)
+    if not entry:
+        return None
+    expires_at, data, available = entry
+    if time.time() > expires_at:
+        WB_LRU_CACHE.pop(key, None)
+        return None
+    WB_LRU_CACHE.move_to_end(key)
+    return data, available
 
-                if valid_ref and row["referred_by"] is None:
-                    await conn.execute(
-                        "UPDATE dh_users SET referred_by = $2 WHERE user_id = $1 AND referred_by IS NULL",
-                        uid, valid_ref
-                    )
-                    should_reward_ref = True
-                    row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
 
-            sub_until = row["sub_until"]
-            trial_claimed = bool(row["trial_claimed"])
-            saved_ids = json.loads(row["saved_ids"] or "[]")
-            fname = row["first_name"] or first_name
-            ref_count = row["ref_count"] or 0
-            ref_days_earned = row["ref_days_earned"] or 0
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
-        row = cur.fetchone()
-        if not row:
-            initial_sub = now + timedelta(days=3)
-            if valid_ref:
-                should_reward_ref = True
-            cur.execute(
-                """INSERT INTO dh_users 
-                   (user_id, first_name, username, trial_claimed, sub_until, saved_ids, referred_by, ref_count, ref_days_earned, created_at)
-                   VALUES (?, ?, ?, 0, ?, '[]', ?, 0, 0, ?)""",
-                (uid, first_name, username, initial_sub.isoformat(), valid_ref, now.isoformat())
-            )
-            sqlite_conn.commit()
-            cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
-            row = cur.fetchone()
-        else:
-            if not row["sub_until"] and not row["trial_claimed"]:
-                initial_sub = now + timedelta(days=3)
-                cur.execute("UPDATE dh_users SET sub_until = ? WHERE user_id = ?", (initial_sub.isoformat(), uid))
-                sqlite_conn.commit()
-                cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
-                row = cur.fetchone()
+def cache_set_wb(key: str, data: List[Dict[str, Any]], available: bool, ttl: float):
+    WB_LRU_CACHE[key] = (time.time() + ttl, data, available)
+    WB_LRU_CACHE.move_to_end(key)
+    while len(WB_LRU_CACHE) > WB_CACHE_MAX_SIZE:
+        WB_LRU_CACHE.popitem(last=False)
 
-            if valid_ref and row["referred_by"] is None:
-                cur.execute(
-                    "UPDATE dh_users SET referred_by = ? WHERE user_id = ? AND referred_by IS NULL",
-                    (valid_ref, uid)
-                )
-                sqlite_conn.commit()
-                should_reward_ref = True
-                cur.execute("SELECT * FROM dh_users WHERE user_id = ?", (uid,))
-                row = cur.fetchone()
 
-        sub_until = datetime.fromisoformat(row["sub_until"]) if row["sub_until"] else None
-        trial_claimed = bool(row["trial_claimed"])
-        saved_ids = json.loads(row["saved_ids"] or "[]")
-        fname = row["first_name"] or first_name
-        ref_count = row["ref_count"] if "ref_count" in row.keys() and row["ref_count"] else 0
-        ref_days_earned = row["ref_days_earned"] if "ref_days_earned" in row.keys() and row["ref_days_earned"] else 0
+# =====================================================================
+# 3. ПРОВЕРКА TELEGRAM INIT DATA
+# =====================================================================
+def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="Сервер не настроен (нет BOT_TOKEN)")
+    if not init_data_raw:
+        raise HTTPException(status_code=401, detail="Откройте приложение внутри Telegram")
+    try:
+        data_dict = dict(parse_qsl(init_data_raw, keep_blank_values=True))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Некорректный формат данных авторизации")
 
-    if should_reward_ref and valid_ref:
-        await reward_referrer(valid_ref, new_user_name=fname)
+    received_hash = data_dict.pop("hash", None)
+    if not received_hash:
+        raise HTTPException(status_code=401, detail="Отсутствует подпись")
 
-    is_active = bool(sub_until and sub_until > now)
-    seconds_left = int((sub_until - now).total_seconds()) if is_active else 0
+    auth_date_raw = data_dict.get("auth_date", "")
+    if not auth_date_raw.isdigit():
+        raise HTTPException(status_code=401, detail="Отсутствует метка времени сессии")
+    auth_date = int(auth_date_raw)
+    now_ts = int(time.time())
+    if auth_date <= 0 or (now_ts - auth_date) > 86400 or (auth_date - now_ts) > 300:
+        raise HTTPException(status_code=401, detail="Сессия устарела. Перезапустите приложение из бота.")
+
+    check_string = "\n".join(f"{k}={v}" for k, v in sorted(data_dict.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+    calc_hash = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc_hash, received_hash):
+        raise HTTPException(status_code=401, detail="Подпись Telegram недействительна")
+
+    try:
+        user_obj = json.loads(data_dict.get("user", ""))
+        uid = int(user_obj["id"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Профиль пользователя отсутствует в подписи")
+
+    ref_id = None
+    start_param = data_dict.get("start_param", "")
+    if start_param.startswith("ref_"):
+        r_clean = start_param[4:].strip()
+        if r_clean.isdigit() and int(r_clean) != uid:
+            ref_id = int(r_clean)
 
     return {
-        "user_id": uid,
-        "name": fname,
-        "trialClaimed": trial_claimed,
-        "subActive": is_active,
-        "subUntil": sub_until.isoformat() if sub_until else None,
-        "secondsLeft": seconds_left,
-        "savedIds": saved_ids,
-        "refCount": ref_count,
-        "refDaysEarned": ref_days_earned,
-        "botUsername": BOT_USERNAME_CACHE,
-        "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{uid}",
+        "uid": uid,
+        "first_name": str(user_obj.get("first_name") or "Пользователь")[:64],
+        "username": str(user_obj.get("username") or "")[:64],
+        "ref_id": ref_id,
     }
 
 
-async def reward_referrer(referrer_id: int, new_user_name: str = "Друг"):
-    bonus_days = 2
-    ref_user = await get_or_create_user(referrer_id)
-    now = now_utc()
-    cur_end = datetime.fromisoformat(ref_user["subUntil"]) if ref_user["subUntil"] else now
-    base_time = cur_end if cur_end > now else now
-    new_end = base_time + timedelta(days=bonus_days)
+async def get_authenticated_user(request: Request) -> Dict[str, Any]:
+    b64_header = request.headers.get("X-Tg-Init-Data-B64", "").strip()
+    if not b64_header:
+        raise HTTPException(status_code=401, detail="Требуется запуск внутри Telegram")
+    try:
+        init_data_raw = unquote(base64.b64decode(b64_header).decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Некорректный заголовок авторизации")
+    auth = verify_telegram_init_data(init_data_raw)
+    check_rate_limit(auth["uid"])
+    return auth
 
-    if pg_pool:
+
+# =====================================================================
+# 4. URL И ВРЕМЯ
+# =====================================================================
+def validate_and_clean_url(raw_url: str, source: Optional[str] = None) -> str:
+    """Строгий разбор URL: https, без кавычек и пробелов, хост из белого списка и совпадает с источником."""
+    u = str(raw_url or "").strip()
+    if not u or any(ch in u for ch in ("'", '"', "<", ">", " ", "\n", "\r", "\t", "\\")) or "javascript:" in u.lower():
+        raise ValueError("URL содержит недопустимые символы")
+    parsed = urlparse(u)
+    if parsed.scheme != "https":
+        raise ValueError("Разрешён только https")
+    host = (parsed.hostname or "").lower()
+    allowed = SOURCE_HOSTS.get(source) if source else set().union(*SOURCE_HOSTS.values())
+    if not allowed or host not in allowed:
+        raise ValueError(f"Домен {host} не соответствует источнику {source}")
+    return u
+
+
+def humanize_time_ago(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "В наличии"
+    diff = max(0, int((now_utc() - dt).total_seconds()))
+    if diff < 60:
+        return "Только что"
+    mins = diff // 60
+    if mins < 60:
+        return f"{mins} мин назад"
+    return f"{mins // 60} ч назад"
+
+
+# =====================================================================
+# 5. БАЗА ДАННЫХ
+# =====================================================================
+def require_db() -> asyncpg.Pool:
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="База данных не подключена (проверьте DATABASE_URL)")
+    return pg_pool
+
+
+async def init_db():
+    global pg_pool
+    if not DATABASE_URL.startswith("postgres"):
+        logger.error("КРИТИЧНО: задайте DATABASE_URL (PostgreSQL)!")
+        return
+    try:
+        pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=8, command_timeout=15)
         async with pg_pool.acquire() as conn:
-            await conn.execute(
-                """UPDATE dh_users 
-                   SET sub_until = $2,
-                       ref_count = COALESCE(ref_count, 0) + 1,
-                       ref_days_earned = COALESCE(ref_days_earned, 0) + $3
-                   WHERE user_id = $1""",
-                referrer_id, new_end, bonus_days
-            )
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute(
-            """UPDATE dh_users 
-               SET sub_until = ?,
-                   ref_count = COALESCE(ref_count, 0) + 1,
-                   ref_days_earned = COALESCE(ref_days_earned, 0) + ?
-               WHERE user_id = ?""",
-            (new_end.isoformat(), bonus_days, referrer_id)
-        )
-        sqlite_conn.commit()
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS dh_users (
+                    user_id BIGINT PRIMARY KEY,
+                    first_name TEXT DEFAULT 'Пользователь',
+                    username TEXT DEFAULT '',
+                    trial_claimed BOOLEAN DEFAULT FALSE,
+                    sub_until TIMESTAMPTZ DEFAULT NULL,
+                    saved_ids TEXT DEFAULT '[]',
+                    referred_by BIGINT DEFAULT NULL,
+                    ref_rewarded BOOLEAN DEFAULT FALSE,
+                    ref_count INT DEFAULT 0,
+                    ref_days_earned INT DEFAULT 0,
+                    ref_month TEXT DEFAULT '',
+                    ref_month_days INT DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS dh_trial_used (user_id BIGINT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS dh_monitors (
+                    id TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    title TEXT NOT NULL,
+                    city TEXT DEFAULT 'Москва',
+                    source TEXT DEFAULT 'Wildberries',
+                    min_margin INT DEFAULT 15,
+                    active BOOLEAN DEFAULT TRUE,
+                    found_today INT DEFAULT 0,
+                    found_date DATE DEFAULT CURRENT_DATE,
+                    last_notified_lot TEXT DEFAULT '',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS dh_monitor_hits (
+                    monitor_id TEXT NOT NULL,
+                    lot_key TEXT NOT NULL,
+                    notified_at TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (monitor_id, lot_key)
+                );
+                CREATE TABLE IF NOT EXISTS dh_lots (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    price INT NOT NULL,
+                    market INT NOT NULL,
+                    profit_rub INT NOT NULL,
+                    profit_pct FLOAT NOT NULL,
+                    tags JSONB DEFAULT '[]'::jsonb,
+                    seller_name TEXT DEFAULT 'Продавец',
+                    seller_rating FLOAT DEFAULT 5.0,
+                    seller_reviews INT DEFAULT 0,
+                    description TEXT DEFAULT '',
+                    url TEXT NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    first_seen TIMESTAMPTZ DEFAULT NOW(),
+                    last_seen TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS dh_saved (
+                    user_id BIGINT NOT NULL,
+                    lot_id TEXT NOT NULL,
+                    snapshot JSONB NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    PRIMARY KEY (user_id, lot_id)
+                );
+                CREATE TABLE IF NOT EXISTS dh_payments (
+                    charge_id TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    amount_stars INT NOT NULL,
+                    days_granted INT NOT NULL,
+                    payload TEXT DEFAULT '',
+                    refunded BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            # Миграции для старой схемы
+            for stmt in (
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL",
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_rewarded BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0",
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0",
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT ''",
+                "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0",
+                "ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE",
+                "ALTER TABLE dh_lots ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NOW()",
+                "ALTER TABLE dh_lots ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ DEFAULT NOW()",
+            ):
+                await conn.execute(stmt)
+        logger.info("PostgreSQL инициализирован.")
+    except Exception as e:
+        logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
+        pg_pool = None
 
-    if bot:
+
+def sponsor_url() -> str:
+    ch = SPONSOR_CHANNEL.strip()
+    if ch.startswith("@"):
+        return f"https://t.me/{ch[1:]}"
+    if ch.startswith("https://t.me/"):
+        return ch
+    return ""
+
+
+async def check_sponsor_membership(uid: int) -> bool:
+    """Fail-closed: при любой ошибке проверки подписка НЕ считается выполненной."""
+    if not SPONSOR_CHANNEL:
+        return True
+    if not bot:
+        return False
+    try:
+        member = await bot.get_chat_member(chat_id=SPONSOR_CHANNEL, user_id=uid)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        logger.error(f"Не удалось проверить подписку {uid} на {SPONSOR_CHANNEL} (бот должен быть админом канала): {e}")
+        return False
+
+
+def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
+    now = now_utc()
+    sub_until: Optional[datetime] = row["sub_until"]
+    active = bool(sub_until and sub_until > now)
+    cur_month = now.strftime("%Y-%m")
+    month_days = int(row["ref_month_days"] or 0) if row["ref_month"] == cur_month else 0
+    return {
+        "user_id": row["user_id"],
+        "name": row["first_name"] or "Пользователь",
+        "trialClaimed": bool(row["trial_claimed"]),
+        "subActive": active,
+        "subUntil": sub_until.isoformat() if sub_until else None,
+        "secondsLeft": int((sub_until - now).total_seconds()) if active else 0,
+        "refCount": row["ref_count"] or 0,
+        "refDaysEarned": row["ref_days_earned"] or 0,
+        "refMonthDays": month_days,
+        "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
+        "sponsorChannel": SPONSOR_CHANNEL,
+        "sponsorUrl": sponsor_url(),
+        "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{row['user_id']}",
+    }
+
+
+async def upsert_user_atomic(uid: int, first_name: str, username: str, candidate_ref_id: Optional[int] = None) -> Dict[str, Any]:
+    pool = require_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            valid_referrer = None
+            if candidate_ref_id and candidate_ref_id != uid:
+                if await conn.fetchval("SELECT user_id FROM dh_users WHERE user_id = $1", candidate_ref_id):
+                    valid_referrer = candidate_ref_id
+            row = await conn.fetchrow(
+                """
+                INSERT INTO dh_users (user_id, first_name, username, referred_by)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id) DO UPDATE
+                SET first_name = EXCLUDED.first_name,
+                    username = CASE WHEN EXCLUDED.username != '' THEN EXCLUDED.username ELSE dh_users.username END
+                RETURNING *
+                """,
+                uid, first_name, username, valid_referrer,
+            )
+    return format_user_row(row)
+
+
+async def get_existing_user(uid: int) -> Dict[str, Any]:
+    pool = require_db()
+    row = await pool.fetchrow("SELECT * FROM dh_users WHERE user_id = $1", uid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Профиль не найден. Перезапустите приложение из бота.")
+    return format_user_row(row)
+
+
+async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
+    pool = require_db()
+    claimed = await pool.fetchval("SELECT trial_claimed FROM dh_users WHERE user_id = $1", uid)
+    if claimed is None:
+        raise HTTPException(status_code=404, detail="Профиль не найден")
+    if not claimed:
+        if await pool.fetchval("SELECT 1 FROM dh_trial_used WHERE user_id = $1", uid):
+            raise HTTPException(status_code=403, detail="Пробный период для этого аккаунта уже был использован")
+        if not await check_sponsor_membership(uid):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Подпишитесь на канал {SPONSOR_CHANNEL} и нажмите кнопку ещё раз. Если вы уже подписаны, подождите несколько секунд.",
+            )
+
+    now = now_utc()
+    cur_month = now.strftime("%Y-%m")
+    referrer_to_notify: Optional[int] = None
+    days_to_ref = 0
+    user_name = "Пользователь"
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+            if not row:
+                raise HTTPException(status_code=404, detail="Профиль не найден")
+            if row["trial_claimed"]:
+                return format_user_row(row)
+
+            user_name = row["first_name"] or "Друг"
+            cur_end = row["sub_until"]
+            base = cur_end if (cur_end and cur_end > now) else now
+            updated = await conn.fetchrow(
+                "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2, ref_rewarded = TRUE WHERE user_id = $1 RETURNING *",
+                uid, base + timedelta(days=TRIAL_DAYS),
+            )
+
+            referred_by = row["referred_by"]
+            if referred_by and not row["ref_rewarded"] and referred_by != uid:
+                ref_row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE", referred_by)
+                if ref_row:
+                    used = int(ref_row["ref_month_days"] or 0) if ref_row["ref_month"] == cur_month else 0
+                    days = min(REFERRAL_BONUS_DAYS, max(0, MAX_REF_DAYS_PER_MONTH - used))
+                    if days > 0:
+                        r_end = ref_row["sub_until"]
+                        r_base = r_end if (r_end and r_end > now) else now
+                        await conn.execute(
+                            """
+                            UPDATE dh_users SET sub_until = $2,
+                                ref_count = COALESCE(ref_count, 0) + 1,
+                                ref_days_earned = COALESCE(ref_days_earned, 0) + $3,
+                                ref_month = $4, ref_month_days = $5
+                            WHERE user_id = $1
+                            """,
+                            referred_by, r_base + timedelta(days=days), days, cur_month, used + days,
+                        )
+                        referrer_to_notify, days_to_ref = referred_by, days
+                    else:
+                        await conn.execute(
+                            "UPDATE dh_users SET ref_count = COALESCE(ref_count, 0) + 1 WHERE user_id = $1", referred_by
+                        )
+
+    if referrer_to_notify and bot and days_to_ref > 0:
         try:
             await bot.send_message(
-                referrer_id,
-                f"🎉 <b>Новый реферал: {new_user_name}!</b>\n\n"
-                f"✅ Друг перешёл по вашей реферальной ссылке.\n"
-                f"🎁 Вам автоматически начислено <b>+{bonus_days} дня подписки DealHunter PRO</b>!",
-                parse_mode="HTML"
+                referrer_to_notify,
+                f"🎉 <b>Реферал подтверждён: {htmllib.escape(user_name)}</b>\n\n"
+                f"Друг активировал доступ. Вам начислено <b>+{days_to_ref} дн. PRO</b>.",
+                parse_mode="HTML",
             )
         except Exception as e:
-            print(f"[Ref Notify Error] {e}")
+            logger.warning(f"Не удалось уведомить реферера {referrer_to_notify}: {e}")
+    return format_user_row(updated)
 
 
-async def activate_trial_db(uid: int) -> Dict[str, Any]:
-    user = await get_or_create_user(uid)
+async def grant_payment(uid: int, first_name: str, charge_id: str, amount: int, payload: str, days: int = 30) -> bool:
+    """Идемпотентно записывает платёж и продлевает подписку. True если платёж новый."""
+    pool = require_db()
     now = now_utc()
-    cur_end = datetime.fromisoformat(user["subUntil"]) if user["subUntil"] else None
-    if not cur_end or cur_end <= now:
-        target_until = now + timedelta(days=3)
-    else:
-        target_until = cur_end
-
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO dh_payments (charge_id, user_id, amount_stars, days_granted, payload)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (charge_id) DO NOTHING RETURNING charge_id
+                """,
+                charge_id, uid, amount, days, payload,
+            )
+            if not inserted:
+                return False
+            await conn.execute(
+                "INSERT INTO dh_users (user_id, first_name) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",
+                uid, first_name[:64],
+            )
+            row = await conn.fetchrow("SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+            cur_end = row["sub_until"]
+            base = cur_end if (cur_end and cur_end > now) else now
             await conn.execute(
                 "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1",
-                uid, target_until
+                uid, base + timedelta(days=days),
             )
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute(
-            "UPDATE dh_users SET trial_claimed = 1, sub_until = ? WHERE user_id = ?",
-            (target_until.isoformat(), uid)
-        )
-        sqlite_conn.commit()
-
-    return await get_or_create_user(uid)
-
-
-async def extend_subscription_db(uid: int, days: int = 30) -> Dict[str, Any]:
-    user = await get_or_create_user(uid)
-    now = now_utc()
-    current_end = datetime.fromisoformat(user["subUntil"]) if user["subUntil"] else now
-    base_time = current_end if current_end > now else now
-    new_end = base_time + timedelta(days=days)
-
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1",
-                uid, new_end
-            )
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute(
-            "UPDATE dh_users SET trial_claimed = 1, sub_until = ? WHERE user_id = ?",
-            (new_end.isoformat(), uid)
-        )
-        sqlite_conn.commit()
-
-    return await get_or_create_user(uid)
-
-
-async def update_saved_db(uid: int, saved_ids: List[str]):
-    raw = json.dumps(saved_ids[:100])
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute("UPDATE dh_users SET saved_ids = $2 WHERE user_id = $1", uid, raw)
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute("UPDATE dh_users SET saved_ids = ? WHERE user_id = ?", (raw, uid))
-        sqlite_conn.commit()
-
-
-async def db_get_monitors(uid: int) -> List[Dict[str, Any]]:
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute("SELECT * FROM dh_monitors WHERE user_id = ? ORDER BY created_at DESC", (uid,))
-        rows = cur.fetchall()
-
-    return [
-        {
-            "id": r["id"],
-            "title": r["title"],
-            "city": r["city"],
-            "source": r["source"],
-            "minMargin": r["min_margin"],
-            "active": bool(r["active"]),
-            "foundToday": r["found_today"],
-        }
-        for r in rows
-    ]
+    return True
 
 
 # =====================================================================
-# 3. КАТАЛОГ ПРЯМЫХ КАРТОЧЕК И ЖИВОЙ ПАРСЕР WB
+# 6. ЧЕСТНАЯ МЕДИАНА: ФИЛЬТРЫ И КЛАСТЕРЫ
 # =====================================================================
-EXTERNAL_LOTS_BUFFER: List[Dict[str, Any]] = []
-
-VERIFIED_DIRECT_LOTS = [
-    {
-        "id": "wb_252295571",
-        "title": "Apple iPhone 16 Pro 256GB Natural Titanium (Dual SIM)",
-        "category": "iphone",
-        "source": "Wildberries",
-        "city": "Склад Коледино",
-        "timeAgo": "1 мин назад",
-        "price": 96400,
-        "market": 118900,
-        "profitRub": 22500,
-        "profitPct": 18.9,
-        "tags": [
-            {"icon": "shopping-bag", "text": "Арт. 252295571"},
-            {"icon": "shield-check", "text": "Оригинал"},
-            {"icon": "zap", "text": "WB Кошелек"},
-        ],
-        "seller": {"name": "Apple Official Supply", "rating": 4.9, "reviews": 642},
-        "desc": "Оригинальный Apple iPhone 16 Pro 256 ГБ в заводской пломбе. Официальная гарантия 1 год, проверка по серийному номеру перед получением в ПВЗ.",
-        "url": "https://www.wildberries.ru/catalog/252295571/detail.aspx",
-    },
-    {
-        "id": "wb_189351478",
-        "title": "Apple iPhone 15 Pro 256GB Титановый (eSIM+SIM)",
-        "category": "iphone",
-        "source": "Wildberries",
-        "city": "Склад Электросталь",
-        "timeAgo": "3 мин назад",
-        "price": 78500,
-        "market": 95900,
-        "profitRub": 17400,
-        "profitPct": 18.1,
-        "tags": [
-            {"icon": "shopping-bag", "text": "Арт. 189351478"},
-            {"icon": "check-circle", "text": "Пломбы"},
-            {"icon": "star", "text": "★ 4.9"},
-        ],
-        "seller": {"name": "iStore РФ", "rating": 4.9, "reviews": 1890},
-        "desc": "Смартфон Apple iPhone 15 Pro 256 ГБ, версия с физической SIM и eSIM. Не активированный, коробка в заводских пломбах.",
-        "url": "https://www.wildberries.ru/catalog/189351478/detail.aspx",
-    },
-    {
-        "id": "wb_195462112",
-        "title": "Sony PlayStation 5 Slim 1TB с дисководом (CFI-2000A01)",
-        "category": "ps5",
-        "source": "Wildberries",
-        "city": "Склад Казань",
-        "timeAgo": "4 мин назад",
-        "price": 41900,
-        "market": 52500,
-        "profitRub": 10600,
-        "profitPct": 20.2,
-        "tags": [
-            {"icon": "gamepad-2", "text": "Арт. 195462112"},
-            {"icon": "box", "text": "С дисководом"},
-            {"icon": "check", "text": "Slim 1TB"},
-        ],
-        "seller": {"name": "GameZone", "rating": 4.9, "reviews": 2150},
-        "desc": "Обновленная версия PlayStation 5 Slim 1000 ГБ с дисководом Blu-ray. Полная русская локализация, пломбы не вскрыты.",
-        "url": "https://www.wildberries.ru/catalog/195462112/detail.aspx",
-    },
-    {
-        "id": "oz_1429803951",
-        "title": "Ноутбук Apple MacBook Air 13 M3 (16 ГБ / 512 ГБ SSD, Midnight)",
-        "category": "macbook",
-        "source": "Ozon",
-        "city": "Ozon Express Москва",
-        "timeAgo": "5 мин назад",
-        "price": 98900,
-        "market": 124000,
-        "profitRub": 25100,
-        "profitPct": 20.2,
-        "tags": [
-            {"icon": "cpu", "text": "Apple M3"},
-            {"icon": "layers", "text": "16/512 ГБ"},
-            {"icon": "truck", "text": "Ozon Доставка"},
-        ],
-        "seller": {"name": "Ozon Казахстан / РФ", "rating": 4.9, "reviews": 418},
-        "desc": "Оригинальный MacBook Air 13 на чипе M3 в конфигурации 16 ГБ объединенной памяти и 512 ГБ SSD. Заводская упаковка.",
-        "url": "https://www.ozon.ru/product/noutbuk-apple-macbook-air-13-m3-16-512-gb-1429803951/",
-    },
-    {
-        "id": "oz_1398451204",
-        "title": "Видеокарта Palit GeForce RTX 4070 Super Dual 12 ГБ GDDR6X",
-        "category": "gpu",
-        "source": "Ozon",
-        "city": "Склад Хоругвино",
-        "timeAgo": "6 мин назад",
-        "price": 54200,
-        "market": 67900,
-        "profitRub": 13700,
-        "profitPct": 20.1,
-        "tags": [
-            {"icon": "cpu", "text": "12 ГБ GDDR6X"},
-            {"icon": "shield", "text": "Гарантия 3 года"},
-            {"icon": "flame", "text": "DLSS 3.5"},
-        ],
-        "seller": {"name": "Ситилинк Официальный", "rating": 4.9, "reviews": 530},
-        "desc": "Новая видеокарта Palit GeForce RTX 4070 SUPER Dual. Пломбы на антистатическом пакете, чек и официальная гарантия 36 мес.",
-        "url": "https://www.ozon.ru/product/videokarta-palit-geforce-rtx-4070-super-dual-12-gb-1398451204/",
-    },
-    {
-        "id": "av_4189205412",
-        "title": "iPhone 15 Pro Max 256 ГБ Natural Titanium (АКБ 98%)",
-        "category": "iphone",
-        "source": "Avito",
-        "city": "Москва, м. Тверская",
-        "timeAgo": "7 мин назад",
-        "price": 79000,
-        "market": 98000,
-        "profitRub": 19000,
-        "profitPct": 19.4,
-        "tags": [
-            {"icon": "battery-charging", "text": "АКБ 98%"},
-            {"icon": "shield-check", "text": "Без ремонтов"},
-            {"icon": "box", "text": "Полный комплект"},
-        ],
-        "seller": {"name": "Алексей", "rating": 5.0, "reviews": 64},
-        "desc": "Личный телефон, покупался в re:Store. С первого дня в чехле и бронестекле. Не вскрывался, любые проверки через 3uTools при встрече.",
-        "url": "https://www.avito.ru/moskva/telefony/iphone_15_pro_max_256gb_natural_titanium_4189205412",
-    },
-    {
-        "id": "av_4201948105",
-        "title": "Видеокарта MSI GeForce RTX 4070 Ti Gaming X Trio 12GB",
-        "category": "gpu",
-        "source": "Avito",
-        "city": "Санкт-Петербург",
-        "timeAgo": "11 мин назад",
-        "price": 56500,
-        "market": 72000,
-        "profitRub": 15500,
-        "profitPct": 21.5,
-        "tags": [
-            {"icon": "file-check", "text": "Чек DNS"},
-            {"icon": "shield", "text": "На пломбах"},
-            {"icon": "thermometer", "text": "Макс 63°C"},
-        ],
-        "seller": {"name": "Михаил", "rating": 4.9, "reviews": 39},
-        "desc": "Карта на гарантии DNS еще 2 года (бумажный чек на руках). Стоит в домашнем ПК, стресс-тест FurMark проходит безупречно.",
-        "url": "https://www.avito.ru/sankt-peterburg/tovary_dlya_kompyutera/msi_rtx_4070_ti_gaming_x_trio_12gb_4201948105",
-    },
-]
+def is_accessory_or_junk(title: str, query_text: str) -> bool:
+    t_low, q_low = title.lower(), query_text.lower()
+    return any(w in t_low and w not in q_low for w in ACCESSORY_STOP_WORDS)
 
 
-async def fetch_wb_live(query_text: str = "iPhone 15 Pro") -> List[Dict[str, Any]]:
+def extract_model_id(t: str) -> str:
+    """Поколение/модель: iPhone 13 и 15, RTX 4060 и 4070, MacBook M1 и M3 нельзя сравнивать между собой."""
+    m = re.search(r"iphone\s*(se|xr|xs|x|\d{1,2})\b", t)
+    if m:
+        return "iphone" + m.group(1)
+    m = re.search(r"\b(rtx|gtx|rx)\s*-?\s*(\d{3,4})\b", t)
+    if m:
+        return m.group(1) + m.group(2)
+    m = re.search(r"macbook\s*(air|pro)?.{0,40}?\bm([1-4])\b", t)
+    if m:
+        return f"mac{m.group(1) or ''}m{m.group(2)}"
+    if re.search(r"playstation\s*5|\bps\s*5\b", t):
+        return "ps5"
+    m = re.search(r"(redmi note|redmi|poco|xiaomi|galaxy)\s*([a-z]?\d{1,3}[a-z]?)", t)
+    if m:
+        return (m.group(1) + m.group(2)).replace(" ", "")
+    return "gen"
+
+
+def extract_model_cluster_key(title: str) -> str:
+    t = title.lower().replace("гб", "gb").replace("тб", "tb")
+    mem = re.search(r"\b(64|128|256|512|1024)\s*gb\b|\b(1|2)\s*tb\b", t)
+    mem_key = mem.group(0).replace(" ", "") if mem else "std"
+    mods = [m for m in ("pro", "max", "plus", "ultra", "slim", "ti", "super", "mini", "fe") if re.search(rf"\b{m}\b", t)]
+    return f"{extract_model_id(t)}:{'_'.join(mods) or 'base'}:{mem_key}"
+
+
+def get_price_and_qty(p: dict) -> Tuple[int, int]:
+    qty = int(p.get("totalQuantity", 1) or 0)
+    for sz in (p.get("sizes") or []):
+        pr = sz.get("price", {}) or {}
+        val = pr.get("product") or pr.get("total") or pr.get("basic") or 0
+        if val > 0:
+            return int(val / 100), qty
+    return int((p.get("salePriceU") or p.get("priceU") or 0) / 100), qty
+
+
+async def fetch_wb_clustered(query_text: str, city: str = "Москва") -> Tuple[List[Dict[str, Any]], bool]:
+    """Возвращает (лоты, источник_доступен)."""
+    q_clean = query_text.strip() or "смартфон"
+    dest = CITY_DEST_MAP.get(city, -1257786)
+    cache_key = f"{q_clean.lower()}::{dest}"
+    cached = cache_get_wb(cache_key)
+    if cached is not None:
+        return cached
+
     endpoints = [
-        f"https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&query={quote(query_text)}&resultset=catalog&sort=popular&spp=30",
-        f"https://search.wb.ru/exactmatch/ru/common/v7/search?ab_testing=false&appType=1&curr=rub&dest=-1257786&query={quote(query_text)}&resultset=catalog&sort=popular&spp=30",
+        f"https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
+        f"https://search.wb.ru/exactmatch/ru/common/v7/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
     ]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "Accept": "application/json",
     }
+    client_kwargs: Dict[str, Any] = {"timeout": 4.5}
+    if WB_PROXY_URL:
+        client_kwargs["proxy"] = WB_PROXY_URL
 
-    products = []
-    async with httpx.AsyncClient(timeout=3.2) as client:
+    products: list = []
+    got_ok_response = False
+    async with httpx.AsyncClient(**client_kwargs) as client:
         for ep in endpoints:
             try:
                 res = await client.get(ep, headers=headers)
                 if res.status_code == 200:
-                    data = json.loads(res.text)
+                    got_ok_response = True
+                    data = res.json()
                     products = data.get("data", {}).get("products", []) or data.get("products", [])
                     if products:
                         break
-            except Exception:
-                continue
+                elif res.status_code == 429:
+                    logger.warning("WB API: 429 Too Many Requests")
+                else:
+                    logger.warning(f"WB API: статус {res.status_code}")
+            except Exception as e:
+                logger.warning(f"Ошибка обращения к WB API: {e}")
 
-    if not products:
-        return []
+    if not got_ok_response:
+        cache_set_wb(cache_key, [], False, WB_CACHE_TTL_EMPTY)
+        return [], False
 
-    def extract_price(p: dict) -> int:
-        sizes = p.get("sizes") or []
-        if sizes and isinstance(sizes, list):
-            pr = sizes[0].get("price", {})
-            val = pr.get("product") or pr.get("basic") or pr.get("total") or 0
-            if val:
-                return int(val / 100)
-        sale_u = p.get("salePriceU") or p.get("priceU") or 0
-        return int(sale_u / 100)
-
-    valid_products = []
+    candidates = []
     for p in products:
-        pr = extract_price(p)
-        if pr >= 1500 and p.get("id"):
-            valid_products.append((pr, p))
-
-    if not valid_products:
-        return []
-
-    all_prices = sorted([x[0] for x in valid_products])
-    median_price = all_prices[len(all_prices) // 2]
-
-    result = []
-    for raw_p, p in valid_products[:8]:
         pid = p.get("id")
-        name = p.get("name", query_text)
-        brand = p.get("brand", "")
-        full_title = f"{brand} {name}".strip() if brand.lower() not in name.lower() else name
-        rating = p.get("reviewRating") or p.get("rating") or 4.8
-        feedbacks = p.get("feedbacks") or 35
-        supplier = p.get("supplier") or brand or "Проверенный продавец WB"
+        if not pid:
+            continue
+        price_rub, qty = get_price_and_qty(p)
+        if price_rub < 300 or qty <= 0:
+            continue
+        name = str(p.get("name") or q_clean).strip()
+        brand = str(p.get("brand") or "").strip()
+        title = f"{brand} {name}".strip() if (brand and brand.lower() not in name.lower()) else name
+        if is_accessory_or_junk(title, q_clean):
+            continue
+        candidates.append((price_rub, title, p))
 
-        market_p = max(int(median_price * 1.16), int(raw_p * 1.21))
-        profit_rub = market_p - raw_p
-        profit_pct = round((profit_rub / market_p) * 100, 1)
+    if len(candidates) < 4:
+        cache_set_wb(cache_key, [], True, WB_CACHE_TTL_EMPTY)
+        return [], True
 
-        low_t = full_title.lower()
-        cat = "all"
-        if any(w in low_t for w in ["iphone", "айфон", "смартфон apple"]):
-            cat = "iphone"
-        elif any(w in low_t for w in ["macbook", "макбук", "ноутбук"]):
-            cat = "macbook"
-        elif any(w in low_t for w in ["rtx", "geforce", "видеокарта", "radeon"]):
-            cat = "gpu"
-        elif any(w in low_t for w in ["playstation", "ps5", "dualsense", "консоль"]):
-            cat = "ps5"
+    prices_sorted = sorted(c[0] for c in candidates)
+    q75 = prices_sorted[int(len(prices_sorted) * 0.75)]
+    floor_price = int(q75 * 0.35) if q75 > 5000 else 300
+    filtered = [c for c in candidates if c[0] >= floor_price]
+    if len(filtered) < 4:
+        filtered = candidates
 
-        result.append({
+    clusters: Dict[str, List[int]] = {}
+    for price_rub, title, _ in filtered:
+        clusters.setdefault(extract_model_cluster_key(title), []).append(price_rub)
+
+    items: List[Dict[str, Any]] = []
+    for price_rub, title, p in filtered:
+        cluster_prices = sorted(clusters.get(extract_model_cluster_key(title), []))
+        if len(cluster_prices) < 3:
+            continue  # без достаточной выборки однотипных позиций медиану не считаем
+        ref_median = cluster_prices[len(cluster_prices) // 2]
+        if ref_median <= 0:
+            continue
+        if price_rub < ref_median:
+            diff_rub = ref_median - price_rub
+            diff_pct = round(diff_rub / ref_median * 100, 1)
+            if diff_pct > 65.0:
+                continue  # почти всегда другой товар или комплектация
+        else:
+            diff_rub, diff_pct = 0, 0.0
+
+        pid = int(p["id"])
+        rating = float(p.get("reviewRating") or p.get("rating") or 0.0)
+        feedbacks = int(p.get("feedbacks") or 0)
+        supplier = str(p.get("supplier") or p.get("brand") or "Продавец WB")
+        items.append({
             "id": f"wb_{pid}",
-            "title": full_title,
-            "category": cat,
+            "title": title[:120],
             "source": "Wildberries",
-            "city": "Склад WB РФ",
-            "timeAgo": "В наличии · Live",
-            "price": raw_p,
-            "market": market_p,
-            "profitRub": profit_rub,
-            "profitPct": profit_pct,
-            "tags": [
-                {"icon": "hash", "text": f"Арт. {pid}"},
-                {"icon": "star", "text": f"★ {rating} ({feedbacks})"},
-                {"icon": "shield-check", "text": "WB Гарантия"},
-            ],
-            "seller": {
-                "name": supplier,
-                "rating": rating,
-                "reviews": feedbacks,
-            },
+            "city": city,
+            "timeAgo": "В наличии · Розница",
+            "price": price_rub,
+            "market": ref_median,
+            "profitRub": diff_rub,
+            "profitPct": diff_pct,
+            "tags": [f"Арт. {pid}", f"★ {rating} ({feedbacks})", f"Выборка: {len(cluster_prices)} шт."],
+            "seller": {"name": supplier[:50], "rating": rating, "reviews": feedbacks},
             "desc": (
-                f"Настоящая карточка товара Wildberries (Артикул: {pid}). "
-                f"Продавец: {supplier}. Рейтинг товара {rating} на основе {feedbacks} отзывов покупателей. "
-                f"Кликните «Забрать лот», чтобы открыть именно эту карточку на сайте или в приложении Wildberries."
-            ),
+                f"Розничное предложение Wildberries (артикул {pid}). Отклонение посчитано от розничной медианы "
+                f"однородной группы товаров: {len(cluster_prices)} поз., медиана {ref_median:,} ₽, регион {city}. "
+                "Это не гарантия выгоды для перепродажи."
+            ).replace(",", " "),
             "url": f"https://www.wildberries.ru/catalog/{pid}/detail.aspx",
         })
-    return result
+
+    items.sort(key=lambda x: x["profitPct"], reverse=True)
+    result = items[:20]
+    cache_set_wb(cache_key, result, True, WB_CACHE_TTL_OK if result else WB_CACHE_TTL_EMPTY)
+    return result, True
 
 
-async def build_combined_feed(
-    category: str = "all",
-    source: str = "all",
-    search_query: str = "",
-) -> List[Dict[str, Any]]:
-    search_q = search_query.strip()
-    if search_q:
-        wb_query = search_q
-    else:
-        wb_query = {
-            "iphone": "Apple iPhone 15 Pro 256",
-            "macbook": "Apple MacBook Air M3",
-            "gpu": "GeForce RTX 4070",
-            "ps5": "PlayStation 5 Slim консоль",
-        }.get(category, "Apple iPhone 15 Pro")
+async def fetch_db_external_lots(source: str, city: str, search_query: str) -> Tuple[bool, List[Dict[str, Any]]]:
+    if not pg_pool:
+        return False, []
+    rows = await pg_pool.fetch(
+        """
+        SELECT * FROM dh_lots
+        WHERE last_seen > NOW() - ($1::int * INTERVAL '1 hour')
+          AND ($2 = 'all' OR source = $2)
+        ORDER BY last_seen DESC LIMIT 200
+        """,
+        LOT_TTL_HOURS, source,
+    )
+    q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
+    results = []
+    for r in rows:
+        if city and city not in r["city"] and r["city"] != "Вся РФ":
+            continue
+        if q_words and not all(w in (r["title"] + " " + (r["description"] or "")).lower() for w in q_words):
+            continue
+        tags = r["tags"]
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except Exception:
+                tags = []
+        results.append({
+            "id": r["id"], "title": r["title"], "source": r["source"], "city": r["city"],
+            "timeAgo": humanize_time_ago(r["first_seen"]),
+            "price": r["price"], "market": r["market"],
+            "profitRub": r["profit_rub"], "profitPct": r["profit_pct"],
+            "tags": list(tags or []),
+            "seller": {"name": r["seller_name"], "rating": r["seller_rating"], "reviews": r["seller_reviews"]},
+            "desc": r["description"] or "", "url": r["url"],
+        })
+    return bool(rows), results
 
-    wb_live_items = await fetch_wb_live(wb_query)
-    combined = list(EXTERNAL_LOTS_BUFFER) + wb_live_items + list(VERIFIED_DIRECT_LOTS)
 
-    seen_ids = set()
-    unique_list = []
-    for item in combined:
-        if item["id"] not in seen_ids:
-            seen_ids.add(item["id"])
-            unique_list.append(item)
+async def build_honest_feed(category: str, source: str, search_query: str, city: str) -> Tuple[bool, List[Dict[str, Any]], bool]:
+    """Возвращает (есть_внешние_лоты, лоты, wb_недоступен)."""
+    city = city if city in ALLOWED_CITIES else "Москва"
+    source = source if source in ALLOWED_SOURCES else "Wildberries"
+    q = search_query.strip()
+    target = q if q else DEFAULT_QUERIES_BY_CATEGORY.get(category, DEFAULT_QUERIES_BY_CATEGORY["all"])
 
-    if category != "all" and not search_q:
-        unique_list = [
-            x for x in unique_list
-            if x.get("category") == category or category in x["title"].lower()
-        ]
-
-    if source != "all":
-        unique_list = [x for x in unique_list if x["source"].lower() == source.lower()]
-
-    if search_q:
-        words = [w.lower() for w in search_q.split() if len(w) >= 2]
-        filtered = [
-            x for x in unique_list
-            if all(w in x["title"].lower() or w in x["desc"].lower() or w in x["source"].lower() for w in words)
-        ]
-        return filtered if filtered else unique_list[:6]
-
-    return unique_list
+    has_ext, combined = await fetch_db_external_lots(source, city, q)
+    unavailable = False
+    if source in ("all", "Wildberries"):
+        wb_items, available = await fetch_wb_clustered(target, city)
+        unavailable = not available
+        combined = combined + wb_items
+    return has_ext, combined, unavailable
 
 
 # =====================================================================
-# 4. ФОНОВЫЙ СКАНЕР МОНИТОРОВ И НЕУБИВАЕМЫЙ ЦИКЛ БОТА
+# 7. СКАНЕР МОНИТОРОВ
 # =====================================================================
+async def deactivate_user_monitors(uid: int):
+    if pg_pool:
+        await pg_pool.execute("UPDATE dh_monitors SET active = FALSE WHERE user_id = $1", uid)
+    logger.info(f"Мониторы пользователя {uid} отключены (бот заблокирован или чат недоступен)")
+
+
 async def monitor_scanner_loop():
     await asyncio.sleep(12)
     while True:
         try:
-            if not bot:
+            if not bot or not pg_pool:
                 await asyncio.sleep(30)
                 continue
+            async with pg_pool.acquire() as conn:
+                await conn.execute("UPDATE dh_monitors SET found_today = 0, found_date = CURRENT_DATE WHERE found_date < CURRENT_DATE")
+                await conn.execute("DELETE FROM dh_monitor_hits WHERE notified_at < NOW() - INTERVAL '7 days'")
+                await conn.execute("DELETE FROM dh_lots WHERE last_seen < NOW() - ($1::int * INTERVAL '1 hour')", LOT_TTL_HOURS)
+                rows = await conn.fetch(
+                    """
+                    SELECT m.* FROM dh_monitors m JOIN dh_users u ON u.user_id = m.user_id
+                    WHERE m.active = TRUE AND u.sub_until IS NOT NULL AND u.sub_until > NOW()
+                    """
+                )
+            if not rows:
+                await asyncio.sleep(REFRESH_SEC)
+                continue
 
-            if pg_pool:
-                async with pg_pool.acquire() as conn:
-                    monitors = await conn.fetch("SELECT * FROM dh_monitors WHERE active = TRUE")
-            else:
-                cur = sqlite_conn.cursor()
-                cur.execute("SELECT * FROM dh_monitors WHERE active = 1")
-                monitors = cur.fetchall()
+            grouped: Dict[Tuple[str, str, str], List[asyncpg.Record]] = {}
+            for m in rows:
+                grouped.setdefault((m["title"].strip().lower(), m["city"].strip(), m["source"].strip()), []).append(m)
 
-            if monitors:
-                for m in monitors:
-                    uid = m["user_id"]
-                    user = await get_or_create_user(uid)
-                    if not user["subActive"]:
+            blocked: set = set()
+            for (q_low, city, source), mon_list in grouped.items():
+                _, feed, unavailable = await build_honest_feed("all", source, q_low, city)
+                if unavailable or not feed:
+                    await asyncio.sleep(1.5)
+                    continue
+                for m in mon_list:
+                    if m["user_id"] in blocked:
                         continue
-
-                    feed = await build_combined_feed(
-                        source=m["source"],
-                        search_query=m["title"]
-                    )
-                    matched_lot = None
-                    for lot in feed:
-                        if lot["profitPct"] >= m["min_margin"]:
-                            matched_lot = lot
+                    eligible = [lot for lot in feed if float(lot.get("profitPct", 0)) >= int(m["min_margin"])]
+                    sent = 0
+                    for lot in eligible:
+                        if sent >= 3:
                             break
-
-                    if not matched_lot and feed:
-                        matched_lot = feed[0]
-
-                    if not matched_lot:
-                        continue
-
-                    last_key = f"{matched_lot['id']}_{matched_lot['price']}"
-                    if m["last_notified_lot"] == last_key:
-                        continue
-
-                    kb = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text=f"🔥 Забрать лот на {matched_lot['source']}", url=matched_lot["url"])],
-                            [InlineKeyboardButton(text="⚡ Открыть DealHunter", web_app=WebAppInfo(url=f"{WEBAPP_URL}?uid={uid}"))],
-                        ]
-                    )
-                    text = (
-                        f"🎯 <b>Найдено объявление по монитору «{m['title']}»!</b>\n\n"
-                        f"📦 <b>{matched_lot['title']}</b>\n"
-                        f"🏷 Площадка: <b>{matched_lot['source']}</b> ({matched_lot['city']})\n"
-                        f"💰 Цена лота: <b>{matched_lot['price']:,} ₽</b> (Рынок: {matched_lot['market']:,} ₽)\n"
-                        f"📈 Выгода: <b>−{matched_lot['profitPct']}% (+{matched_lot['profitRub']:,} ₽)</b>"
-                    ).replace(",", " ")
-
-                    try:
-                        await bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
-                        if pg_pool:
-                            async with pg_pool.acquire() as conn:
-                                await conn.execute(
-                                    "UPDATE dh_monitors SET found_today = found_today + 1, last_notified_lot = $2 WHERE id = $1",
-                                    m["id"], last_key
-                                )
-                        else:
-                            cur = sqlite_conn.cursor()
-                            cur.execute(
-                                "UPDATE dh_monitors SET found_today = found_today + 1, last_notified_lot = ? WHERE id = ?",
-                                (last_key, m["id"])
+                        lot_key = f"{lot['id']}_{lot['price']}"
+                        inserted = await pg_pool.fetchval(
+                            "INSERT INTO dh_monitor_hits (monitor_id, lot_key) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING lot_key",
+                            m["id"], lot_key,
+                        )
+                        if not inserted:
+                            continue
+                        kb = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text=f"Открыть карточку на {lot['source']}", url=lot["url"])],
+                            [InlineKeyboardButton(text="Открыть DealHunter", web_app=WebAppInfo(url=WEBAPP_URL))],
+                        ])
+                        text = (
+                            f"🎯 <b>Совпадение по монитору «{htmllib.escape(m['title'])}»</b>\n\n"
+                            f"📦 <b>{htmllib.escape(lot['title'])}</b>\n"
+                            f"📍 {htmllib.escape(lot['city'])} ({lot['source']})\n"
+                            f"💰 Цена: <b>{lot['price']:,} ₽</b> (медиана группы: {lot['market']:,} ₽)\n"
+                            f"📊 Отклонение от медианы: <b>−{lot['profitPct']}% (−{lot['profitRub']:,} ₽)</b>"
+                        ).replace(",", " ")
+                        try:
+                            await bot.send_message(m["user_id"], text, parse_mode="HTML", reply_markup=kb)
+                            sent += 1
+                            await pg_pool.execute(
+                                "UPDATE dh_monitors SET found_today = found_today + 1, last_notified_lot = $2 WHERE id = $1",
+                                m["id"], lot_key,
                             )
-                            sqlite_conn.commit()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        await asyncio.sleep(60)
-
-
-async def resilient_bot_polling_loop():
-    """Бесконечный самовосстанавливающийся цикл работы бота: если при деплое возникает конфликт, он сам переподключается через 5 секунд!"""
-    global BOT_USERNAME_CACHE
-    if not bot:
-        return
-    while True:
-        try:
-            me = await bot.get_me()
-            if me and me.username:
-                BOT_USERNAME_CACHE = me.username
-                print(f"[DealHunter Bot] Активен: @{BOT_USERNAME_CACHE}")
-            await bot.delete_webhook(drop_pending_updates=False)
-            await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+                        except TelegramForbiddenError:
+                            await deactivate_user_monitors(m["user_id"])
+                            blocked.add(m["user_id"])
+                            break
+                        except TelegramRetryAfter as e:
+                            await pg_pool.execute("DELETE FROM dh_monitor_hits WHERE monitor_id = $1 AND lot_key = $2", m["id"], lot_key)
+                            await asyncio.sleep(min(float(e.retry_after), 30.0))
+                            break
+                        except TelegramBadRequest as e:
+                            if "chat not found" in str(e).lower() or "user not found" in str(e).lower():
+                                await deactivate_user_monitors(m["user_id"])
+                                blocked.add(m["user_id"])
+                                break
+                            logger.warning(f"BadRequest при отправке монитору {m['id']}: {e}")
+                        except Exception as e:
+                            await pg_pool.execute("DELETE FROM dh_monitor_hits WHERE monitor_id = $1 AND lot_key = $2", m["id"], lot_key)
+                            logger.warning(f"Ошибка отправки монитору {m['id']}: {e}")
+                        await asyncio.sleep(0.05)
+                await asyncio.sleep(1.5)
         except Exception as e:
-            print(f"[DealHunter Bot] Переподключение поллинга через 5 сек ({e})...")
-            await asyncio.sleep(5)
+            logger.exception(f"Ошибка цикла сканера: {e}")
+        await asyncio.sleep(REFRESH_SEC)
 
 
 # =====================================================================
-# 5. ОБРАБОТЧИКИ КОМАНД БОТА (/start + рефералы + оплата)
+# 8. TELEGRAM BOT
 # =====================================================================
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
     uid = message.from_user.id
-    fname = message.from_user.first_name or "Охотник"
-    uname = message.from_user.username or ""
+    fname = (message.from_user.first_name or "Пользователь")[:64]
+    uname = (message.from_user.username or "")[:64]
+    ref = None
+    args = (command.args if command else None) or ""
+    if args.startswith("ref_") and args[4:].strip().isdigit() and int(args[4:]) != uid:
+        ref = int(args[4:])
+    if pg_pool:
+        try:
+            await upsert_user_atomic(uid, fname, uname, candidate_ref_id=ref)
+        except Exception as e:
+            logger.warning(f"/start: не удалось создать профиль {uid}: {e}")
 
-    referrer_id = None
-    args = command.args if command else None
-    if not args and message.text and " " in message.text:
-        args = message.text.split(" ", 1)[1].strip()
-    if args:
-        clean_arg = args.replace("ref_", "").strip()
-        if clean_arg.isdigit() and int(clean_arg) != uid:
-            referrer_id = int(clean_arg)
-
-    await get_or_create_user(uid, fname, uname, referrer_id=referrer_id)
-
-    sep = "&" if "?" in WEBAPP_URL else "?"
-    app_url = f"{WEBAPP_URL}{sep}uid={uid}"
-    if referrer_id:
-        app_url += f"&ref={referrer_id}"
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Открыть Радар DealHunter", web_app=WebAppInfo(url=app_url))],
-            [InlineKeyboardButton(text="⭐️ Купить Stars со скидкой", url=BUNNY_STARS_URL)],
-        ]
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Открыть DealHunter", web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton(text="Пополнить Stars (BunnyStars)", url=BUNNY_STARS_URL)],
+    ])
+    sponsor_line = f"\n• Для активации пробного периода нужна подписка на {SPONSOR_CHANNEL}." if SPONSOR_CHANNEL else ""
     await message.answer(
-        f"👋 <b>Добро пожаловать в DealHunter PRO, {fname}!</b>\n\n"
-        "🔥 Наш радар в реальном времени находит выгодные товары на <b>Wildberries, Ozon и Avito</b> с прямыми ссылками на карточки.\n\n"
-        "🎁 <b>Вам активировано 3 дня PRO-подписки бесплатно!</b>\n"
-        "👥 Приглашайте друзей во вкладке «Профиль» и получайте <b>+2 дня PRO</b> за каждого друга.\n\n"
-        "👇 Нажмите кнопку ниже, чтобы запустить приложение:",
+        f"Здравствуйте, <b>{htmllib.escape(fname)}</b>.\n\n"
+        "<b>DealHunter</b> — сравнение розничных цен и фоновый мониторинг карточек товаров.\n\n"
+        f"• Новым пользователям: <b>{TRIAL_DAYS} дня PRO бесплатно</b> при активации в приложении.{sponsor_line}\n"
+        f"• За друга, активировавшего доступ: <b>+{REFERRAL_BONUS_DAYS} дня PRO</b> (до {MAX_REF_DAYS_PER_MONTH} дней в месяц).\n"
+        "• Уведомления в Telegram приходят только при активной подписке.\n\n"
+        "/paysupport — вопросы по оплате, /terms — условия, /deletedata — удаление данных.",
         parse_mode="HTML",
         reply_markup=kb,
     )
 
 
+@dp.message(Command("paysupport"))
+async def cmd_paysupport(message: types.Message):
+    contact = ADMIN_CONTACT or "администратору сервиса"
+    await message.answer(
+        "<b>Поддержка по платежам</b>\n\n"
+        f"По вопросам оплаты и возврата Stars напишите {contact} и укажите ID транзакции "
+        "(он приходит в сообщении после оплаты). Возврат оформляется вручную, подписка при этом снимается.",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("terms"))
+async def cmd_terms(message: types.Message):
+    await message.answer(
+        "<b>Условия использования</b>\n\n"
+        "DealHunter — справочный инструмент сравнения открытых розничных цен. «Отклонение от медианы» рассчитывается "
+        "по выборке однотипных товаров и не является гарантией выгоды или рекомендацией к покупке.\n"
+        f"PRO: {STARS_PRICE} Stars за 30 дней. Вопросы по платежам: /paysupport.",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("deletedata"))
+async def cmd_deletedata(message: types.Message, command: Optional[CommandObject] = None):
+    uid = message.from_user.id
+    confirm_arg = ((command.args if command else "") or "").strip().lower()
+    if confirm_arg != "confirm":
+        await message.answer(
+            "Будут удалены ваш профиль, мониторы и закладки. <b>Оставшиеся дни подписки сгорят.</b> "
+            "Платежи сохраняются без привязки к вам, а факт использования пробного периода — "
+            "в виде числового идентификатора (защита от повторных триалов).\n\n"
+            "Для подтверждения отправьте: <code>/deletedata confirm</code>",
+            parse_mode="HTML",
+        )
+        return
+    if not pg_pool:
+        await message.answer("Сервис временно недоступен, попробуйте позже.")
+        return
+    try:
+        async with pg_pool.acquire() as conn:
+            async with conn.transaction():
+                trial = await conn.fetchval("SELECT trial_claimed FROM dh_users WHERE user_id = $1", uid)
+                if trial:
+                    await conn.execute("INSERT INTO dh_trial_used (user_id) VALUES ($1) ON CONFLICT DO NOTHING", uid)
+                await conn.execute("DELETE FROM dh_monitor_hits WHERE monitor_id IN (SELECT id FROM dh_monitors WHERE user_id = $1)", uid)
+                await conn.execute("DELETE FROM dh_monitors WHERE user_id = $1", uid)
+                await conn.execute("DELETE FROM dh_saved WHERE user_id = $1", uid)
+                await conn.execute("UPDATE dh_payments SET user_id = 0 WHERE user_id = $1", uid)
+                await conn.execute("UPDATE dh_users SET referred_by = NULL WHERE referred_by = $1", uid)
+                await conn.execute("DELETE FROM dh_users WHERE user_id = $1", uid)
+        await message.answer("Ваши данные удалены.")
+    except Exception as e:
+        logger.exception(f"Ошибка удаления данных {uid}: {e}")
+        await message.answer("Не удалось удалить данные. Попробуйте позже или напишите в поддержку.")
+
+
 @dp.pre_checkout_query()
 async def on_pre_checkout(query: PreCheckoutQuery):
+    parts = (query.invoice_payload or "").split("_")
+    valid = (
+        len(parts) == 4 and parts[0] == "pro" and parts[1] == "30d"
+        and parts[2] == str(query.from_user.id)
+        and query.currency == "XTR" and query.total_amount == STARS_PRICE
+    )
+    if not valid:
+        await bot.answer_pre_checkout_query(query.id, ok=False, error_message="Некорректный счёт. Создайте новый в приложении.")
+        return
+    if not pg_pool:
+        await bot.answer_pre_checkout_query(query.id, ok=False, error_message="Сервис обновляется. Попробуйте через минуту.")
+        return
     await bot.answer_pre_checkout_query(query.id, ok=True)
 
 
 @dp.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
+    sp = message.successful_payment
     uid = message.from_user.id
-    await extend_subscription_db(uid, days=30)
-    await message.answer(
-        "✅ <b>Оплата успешно подтверждена!</b>\n\n"
-        "Вам начислено <b>+30 дней подписки DealHunter PRO</b>.\n"
-        "Все прямые ссылки на лоты и фоновый мониторинг активированы!",
-        parse_mode="HTML",
-    )
+    charge_id = sp.telegram_payment_charge_id
 
+    # 1) Запись в БД (до 3 попыток). Уведомление отправляется ОТДЕЛЬНО и на возврат не влияет.
+    granted, is_new = False, False
+    for attempt in range(3):
+        try:
+            is_new = await grant_payment(uid, message.from_user.first_name or "Пользователь", charge_id,
+                                         sp.total_amount, sp.invoice_payload, 30)
+            granted = True
+            break
+        except Exception as e:
+            logger.error(f"Попытка {attempt + 1}/3 зачисления платежа {charge_id} не удалась: {e}")
+            await asyncio.sleep(1.5)
 
-@app.on_event("startup")
-async def on_startup():
-    await init_db()
-    asyncio.create_task(resilient_bot_polling_loop())
-    asyncio.create_task(monitor_scanner_loop())
+    if not granted:
+        logger.critical(f"СБОЙ ЗАЧИСЛЕНИЯ {charge_id} для {uid}. Выполняю возврат Stars.")
+        try:
+            await bot.refund_star_payment(user_id=uid, telegram_payment_charge_id=charge_id)
+            text = ("⚠️ Технический сбой при зачислении подписки. Ваши Stars <b>автоматически возвращены</b>.\n"
+                    f"ID транзакции: <code>{charge_id}</code>")
+        except Exception as e:
+            logger.critical(f"Не удалось выполнить автовозврат {charge_id}: {e}")
+            text = ("⚠️ Платёж получен, но активация задержалась. Сохраните ID транзакции "
+                    f"<code>{charge_id}</code> и напишите в поддержку (/paysupport).")
+        try:
+            await message.answer(text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Не удалось отправить сообщение о сбое {uid}: {e}")
+        return
 
-
-# =====================================================================
-# 6. REST API ЭНДПОИНТЫ (БЕЗ КИРИЛЛИЧЕСКИХ ЗАГОЛОВКОВ!)
-# =====================================================================
-def parse_request_params(request: Request) -> Dict[str, Any]:
-    q_uid = request.query_params.get("uid") or "5123484212"
-    uid = int(q_uid) if str(q_uid).isdigit() else 5123484212
-
-    q_name = request.query_params.get("name") or "Охотник"
     try:
-        fname = unquote(q_name)
-    except Exception:
-        fname = "Охотник"
+        if is_new:
+            await message.answer(
+                "✅ <b>Оплата подтверждена.</b> Подписка PRO продлена на 30 дней.\n"
+                f"ID транзакции: <code>{charge_id}</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await message.answer("ℹ️ Этот платёж уже был зачислен ранее.")
+    except Exception as e:
+        logger.warning(f"Подписка начислена, но уведомление не отправлено ({uid}): {e}")
 
-    q_ref = request.query_params.get("ref") or ""
-    q_ref_clean = str(q_ref).replace("ref_", "").strip()
-    ref_id = int(q_ref_clean) if (q_ref_clean.isdigit() and int(q_ref_clean) != uid) else None
 
-    return {"uid": uid, "name": fname, "ref_id": ref_id}
+@dp.message(Command("refund"))
+async def cmd_admin_refund(message: types.Message, command: Optional[CommandObject] = None):
+    """Только для администратора: /refund USER_ID CHARGE_ID. Возвращает Stars и снимает начисленные дни."""
+    if not ADMIN_UID or message.from_user.id != ADMIN_UID or not pg_pool:
+        return
+    args = (command.args or "").split() if command else []
+    if len(args) != 2 or not args[0].isdigit():
+        await message.answer("Использование: <code>/refund USER_ID CHARGE_ID</code>", parse_mode="HTML")
+        return
+    target_uid, charge_id = int(args[0]), args[1].strip()
+    pay = await pg_pool.fetchrow("SELECT * FROM dh_payments WHERE charge_id = $1", charge_id)
+    if not pay:
+        await message.answer("Платёж не найден в базе.")
+        return
+    if pay["refunded"]:
+        await message.answer("Этот платёж уже возвращён.")
+        return
+    if pay["user_id"] not in (target_uid, 0):
+        await message.answer("USER_ID не совпадает с владельцем платежа.")
+        return
+    try:
+        await bot.refund_star_payment(user_id=target_uid, telegram_payment_charge_id=charge_id)
+    except Exception as e:
+        await message.answer(f"Ошибка возврата: {e}")
+        return
+    async with pg_pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("UPDATE dh_payments SET refunded = TRUE WHERE charge_id = $1", charge_id)
+            await conn.execute(
+                "UPDATE dh_users SET sub_until = GREATEST(NOW(), sub_until - ($2::int * INTERVAL '1 day')) WHERE user_id = $1 AND sub_until IS NOT NULL",
+                target_uid, pay["days_granted"],
+            )
+    await message.answer(f"✅ Возврат по <code>{charge_id}</code> выполнен, {pay['days_granted']} дн. подписки сняты.", parse_mode="HTML")
+
+
+async def single_leader_background_manager():
+    """Advisory lock: бота и сканер запускает только один процесс."""
+    global BOT_USERNAME_CACHE, background_leader_conn
+    await asyncio.sleep(2)
+    while True:
+        try:
+            if not pg_pool:
+                await asyncio.sleep(5)
+                continue
+            if background_leader_conn is None or background_leader_conn.is_closed():
+                background_leader_conn = await pg_pool.acquire()
+            if await background_leader_conn.fetchval("SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_ID):
+                logger.info("Лидер получен: запуск бота и сканера.")
+                scanner_task = asyncio.create_task(monitor_scanner_loop())
+                try:
+                    if bot:
+                        me = await bot.get_me()
+                        if me and me.username:
+                            BOT_USERNAME_CACHE = me.username
+                        await bot.delete_webhook(drop_pending_updates=False)
+                        await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+                    else:
+                        await scanner_task
+                finally:
+                    scanner_task.cancel()
+            else:
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Перезапуск координатора через 5 с: {e}")
+            await asyncio.sleep(5)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    global background_task
+    await init_db()
+    background_task = asyncio.create_task(single_leader_background_manager())
+    yield
+    if background_task:
+        background_task.cancel()
+    if bot:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+    if pg_pool:
+        await pg_pool.close()
+
+
+app = FastAPI(title="DealHunter v7", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[WEBAPP_URL, "https://web.telegram.org", "https://t.me"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "X-Tg-Init-Data-B64", "X-Worker-Secret"],
+)
+
+
+# =====================================================================
+# 9. REST API
+# =====================================================================
+def monitor_to_json(r: asyncpg.Record) -> Dict[str, Any]:
+    return {
+        "id": r["id"], "title": r["title"], "city": r["city"], "source": r["source"],
+        "minMargin": r["min_margin"], "active": bool(r["active"]), "foundToday": r["found_today"],
+    }
+
+
+async def list_monitors(uid: int) -> List[Dict[str, Any]]:
+    rows = await require_db().fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
+    return [monitor_to_json(r) for r in rows]
+
+
+async def list_saved(uid: int) -> List[Dict[str, Any]]:
+    rows = await require_db().fetch("SELECT snapshot FROM dh_saved WHERE user_id = $1 ORDER BY created_at DESC", uid)
+    out = []
+    for r in rows:
+        snap = r["snapshot"]
+        if isinstance(snap, str):
+            try:
+                snap = json.loads(snap)
+            except Exception:
+                continue
+        out.append(snap)
+    return out
 
 
 @app.get("/health")
-@app.head("/")
 async def health():
-    return {"status": "ok", "bot": BOT_USERNAME_CACHE, "db": "postgres" if pg_pool else "sqlite"}
+    return {"status": "ok", "bot": BOT_USERNAME_CACHE, "db_connected": bool(pg_pool)}
+
+
+@app.head("/")
+async def head_root():
+    return HTMLResponse("")
 
 
 @app.get("/api/state")
-async def api_user_state(request: Request):
-    p = parse_request_params(request)
-    user = await get_or_create_user(uid=p["uid"], first_name=p["name"], referrer_id=p["ref_id"])
-    monitors = await db_get_monitors(p["uid"])
-    return JSONResponse({"user": user, "monitors": monitors})
+async def api_state(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    user = await upsert_user_atomic(auth["uid"], auth["first_name"], auth["username"], auth["ref_id"])
+    await require_db().execute(
+        "UPDATE dh_monitors SET found_today = 0, found_date = CURRENT_DATE WHERE user_id = $1 AND found_date < CURRENT_DATE",
+        auth["uid"],
+    )
+    return JSONResponse({
+        "user": user,
+        "monitors": await list_monitors(auth["uid"]),
+        "saved": await list_saved(auth["uid"]),
+        "bunnyUrl": BUNNY_STARS_URL,
+        "refreshSec": REFRESH_SEC,
+    })
 
 
 @app.post("/api/claim-trial")
-async def api_claim_trial(request: Request):
-    p = parse_request_params(request)
-    user = await activate_trial_db(p["uid"])
-    return JSONResponse({"status": "ok", "user": user})
+async def api_claim_trial(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    await upsert_user_atomic(auth["uid"], auth["first_name"], auth["username"], auth["ref_id"])
+    return JSONResponse({"status": "ok", "user": await claim_trial_and_reward_referrer(auth["uid"])})
 
 
 @app.get("/api/live-feed")
 async def api_live_feed(
-    request: Request,
-    category: str = "all",
-    source: str = "all",
-    q: str = "",
+    category: str = Query("all", max_length=20),
+    source: str = Query("Wildberries", max_length=20),
+    q: str = Query("", max_length=80),
+    city: str = Query("Москва", max_length=40),
+    auth: Dict[str, Any] = Depends(get_authenticated_user),
 ):
-    p = parse_request_params(request)
-    user = await get_or_create_user(p["uid"], p["name"], referrer_id=p["ref_id"])
+    user = await get_existing_user(auth["uid"])
     if not user["subActive"]:
-        return JSONResponse({"locked": True, "reason": "SUBSCRIPTION_REQUIRED", "items": []})
-    items = await build_combined_feed(category=category, source=source, search_query=q)
-    return JSONResponse({"locked": False, "items": items, "updatedAt": now_utc().strftime("%H:%M:%S")})
+        return JSONResponse({"locked": True, "items": [], "extConnected": False, "sourceUnavailable": False})
+    category = category if category in DEFAULT_QUERIES_BY_CATEGORY else "all"
+    source = source if source in ALLOWED_SOURCES else "Wildberries"
+    city = city if city in ALLOWED_CITIES else "Москва"
+    has_ext, items, unavailable = await build_honest_feed(category, source, q, city)
+    return JSONResponse({
+        "locked": False, "items": items, "extConnected": has_ext,
+        "sourceUnavailable": unavailable, "updatedAt": now_utc().strftime("%H:%M:%S"),
+    })
 
 
 class MonitorCreateReq(BaseModel):
-    title: str
-    city: str = "Москва"
-    source: str = "all"
-    minMargin: int = 15
+    title: str = Field(..., min_length=2, max_length=80)
+    city: Literal["Москва", "Санкт-Петербург", "Екатеринбург", "Казань", "Новосибирск", "Краснодар"] = "Москва"
+    source: Literal["Wildberries", "Ozon", "Avito", "all"] = "Wildberries"
+    minMargin: int = Field(default=15, ge=5, le=65)
 
 
 @app.post("/api/monitors")
-async def api_add_monitor(data: MonitorCreateReq, request: Request):
-    p = parse_request_params(request)
-    uid = p["uid"]
-    user = await get_or_create_user(uid)
+async def api_create_monitor(data: MonitorCreateReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    uid = auth["uid"]
+    user = await get_existing_user(uid)
     if not user["subActive"]:
-        raise HTTPException(status_code=403, detail="Требуется подписка PRO")
-
+        raise HTTPException(status_code=403, detail="Требуется активная подписка PRO")
+    pool = require_db()
+    if await pool.fetchval("SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid) >= MAX_MONITORS:
+        raise HTTPException(status_code=400, detail=f"Лимит: не более {MAX_MONITORS} мониторов")
     mid = f"m_{uid}_{int(now_utc().timestamp() * 1000)}"
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today) VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0)",
-                mid, uid, data.title.strip(), data.city.strip(), data.source, data.minMargin
-            )
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute(
-            "INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)",
-            (mid, uid, data.title.strip(), data.city.strip(), data.source, data.minMargin, now_utc().isoformat())
-        )
-        sqlite_conn.commit()
-
-    return JSONResponse({"status": "ok", "monitors": await db_get_monitors(uid)})
+    await pool.execute(
+        "INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today, found_date) "
+        "VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0, CURRENT_DATE)",
+        mid, uid, data.title.strip(), data.city, data.source, data.minMargin,
+    )
+    return JSONResponse({"status": "ok", "monitors": await list_monitors(uid)})
 
 
 @app.post("/api/monitors/{mid}/toggle")
-async def api_toggle_monitor(mid: str, request: Request):
-    p = parse_request_params(request)
-    uid = p["uid"]
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute("UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id = $2", mid, uid)
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute("UPDATE dh_monitors SET active = CASE WHEN active=1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?", (mid, uid))
-        sqlite_conn.commit()
-    return JSONResponse({"status": "ok", "monitors": await db_get_monitors(uid)})
+async def api_toggle_monitor(mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    await require_db().execute("UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id = $2", mid, auth["uid"])
+    return JSONResponse({"status": "ok", "monitors": await list_monitors(auth["uid"])})
 
 
 @app.delete("/api/monitors/{mid}")
-async def api_delete_monitor(mid: str, request: Request):
-    p = parse_request_params(request)
-    uid = p["uid"]
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute("DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2", mid, uid)
-    else:
-        cur = sqlite_conn.cursor()
-        cur.execute("DELETE FROM dh_monitors WHERE id = ? AND user_id = ?", (mid, uid))
-        sqlite_conn.commit()
-    return JSONResponse({"status": "ok", "monitors": await db_get_monitors(uid)})
+async def api_delete_monitor(mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    pool = require_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            deleted = await conn.fetchval("DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2 RETURNING id", mid, auth["uid"])
+            if deleted:
+                await conn.execute("DELETE FROM dh_monitor_hits WHERE monitor_id = $1", mid)
+    return JSONResponse({"status": "ok", "monitors": await list_monitors(auth["uid"])})
 
 
-class SavedUpdateReq(BaseModel):
-    savedIds: List[str]
+class SavedLot(BaseModel):
+    id: str = Field(..., max_length=60)
+    title: str = Field(..., max_length=140)
+    source: Literal["Avito", "Ozon", "Wildberries"]
+    city: str = Field(default="", max_length=50)
+    price: int = Field(..., gt=0)
+    market: int = Field(..., gt=0)
+    profitRub: int = 0
+    profitPct: float = 0.0
+    sellerName: str = Field(default="Продавец", max_length=60)
+    sellerRating: float = 0.0
+    sellerReviews: int = 0
+    url: str = Field(..., max_length=400)
+
+
+class SaveReq(BaseModel):
+    lot: SavedLot
 
 
 @app.post("/api/saved")
-async def api_save_lots(data: SavedUpdateReq, request: Request):
-    p = parse_request_params(request)
-    await update_saved_db(p["uid"], data.savedIds)
-    return JSONResponse({"status": "ok"})
+async def api_save_lot(data: SaveReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    uid, lot = auth["uid"], data.lot
+    pool = require_db()
+    try:
+        safe_url = validate_and_clean_url(lot.url, lot.source)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Недопустимая ссылка на карточку")
+    lot_id = re.sub(r"[^a-zA-Z0-9_\-]", "", lot.id)[:60]
+    if not lot_id:
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор лота")
+    if await pool.fetchval("SELECT COUNT(*) FROM dh_saved WHERE user_id = $1", uid) >= MAX_SAVED:
+        raise HTTPException(status_code=400, detail=f"Лимит закладок: {MAX_SAVED}")
+    snapshot = {
+        "id": lot_id, "title": lot.title, "source": lot.source, "city": lot.city,
+        "timeAgo": "Сохранено " + now_utc().strftime("%d.%m %H:%M"),
+        "price": lot.price, "market": lot.market,
+        "profitRub": max(0, lot.profitRub), "profitPct": max(0.0, lot.profitPct),
+        "tags": ["Цена на момент сохранения"],
+        "seller": {"name": lot.sellerName, "rating": lot.sellerRating, "reviews": lot.sellerReviews},
+        "desc": "Снимок карточки на момент сохранения. Актуальную цену и наличие смотрите на странице товара.",
+        "url": safe_url,
+    }
+    await pool.execute(
+        "INSERT INTO dh_saved (user_id, lot_id, snapshot) VALUES ($1, $2, $3::jsonb) "
+        "ON CONFLICT (user_id, lot_id) DO NOTHING",
+        uid, lot_id, json.dumps(snapshot, ensure_ascii=False),
+    )
+    return JSONResponse({"status": "ok", "saved": await list_saved(uid)})
+
+
+@app.delete("/api/saved/{lot_id}")
+async def api_unsave_lot(lot_id: str, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    await require_db().execute("DELETE FROM dh_saved WHERE user_id = $1 AND lot_id = $2", auth["uid"], lot_id[:60])
+    return JSONResponse({"status": "ok", "saved": await list_saved(auth["uid"])})
 
 
 @app.post("/api/create-invoice")
-async def api_create_stars_invoice(request: Request):
-    p = parse_request_params(request)
-    uid = p["uid"]
+async def api_create_stars_invoice(auth: Dict[str, Any] = Depends(get_authenticated_user)):
     if not bot:
-        return JSONResponse({"error": "BOT_TOKEN не задан"}, status_code=400)
+        raise HTTPException(status_code=500, detail="Бот не подключён")
     try:
-        invoice_link = await bot.create_invoice_link(
+        link = await bot.create_invoice_link(
             title="DealHunter PRO — 30 дней",
-            description="Полный доступ к прямым лотам Avito, Ozon, Wildberries и авто-мониторингу.",
-            payload=f"pro_30d_{uid}_{int(now_utc().timestamp())}",
+            description="Поиск карточек, сравнение с медианой модели и фоновые уведомления.",
+            payload=f"pro_30d_{auth['uid']}_{int(now_utc().timestamp())}",
             provider_token="",
             currency="XTR",
             prices=[LabeledPrice(label="PRO на 30 дней", amount=STARS_PRICE)],
         )
-        return JSONResponse({"invoiceUrl": invoice_link})
+        return JSONResponse({"invoiceUrl": link})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.error(f"Ошибка создания инвойса: {e}")
+        return JSONResponse({"error": "Не удалось создать счёт Telegram Stars"}, status_code=500)
+
+
+class ExternalLotItem(BaseModel):
+    id: str = Field(..., max_length=60)
+    title: str = Field(..., max_length=140)
+    source: Literal["Avito", "Ozon", "Wildberries"]
+    city: str = Field(default="Москва", max_length=50)
+    price: int = Field(..., gt=0)
+    market: int = Field(..., gt=0)
+    tags: List[str] = Field(default_factory=list)
+    sellerName: str = Field(default="Продавец", max_length=60)
+    sellerRating: float = Field(default=5.0)
+    sellerReviews: int = Field(default=0)
+    desc: str = Field(default="", max_length=600)
+    url: str = Field(..., max_length=400)
 
 
 @app.post("/api/push-lots")
-async def api_push_external_lots(request: Request, x_worker_secret: Optional[str] = Header(None)):
-    if x_worker_secret != WORKER_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid worker secret")
-    payload = await request.json()
-    lots = payload if isinstance(payload, list) else payload.get("lots", [])
-    for lot in reversed(lots):
-        EXTERNAL_LOTS_BUFFER.insert(0, lot)
-    del EXTERNAL_LOTS_BUFFER[100:]
-    return JSONResponse({"status": "ok", "buffered": len(EXTERNAL_LOTS_BUFFER)})
+async def api_push_external_lots(lots: List[ExternalLotItem], x_worker_secret: Optional[str] = Header(None)):
+    if not WORKER_SECRET:
+        raise HTTPException(status_code=503, detail="WORKER_SECRET не настроен")
+    if not x_worker_secret or not hmac.compare_digest(x_worker_secret, WORKER_SECRET):
+        raise HTTPException(status_code=401, detail="Неверный ключ авторизации")
+
+    pool = require_db()
+    saved = 0
+    async with pool.acquire() as conn:
+        for item in lots[:50]:
+            try:
+                safe_url = validate_and_clean_url(item.url, item.source)
+            except ValueError as err:
+                logger.warning(f"Отклонён лот {item.id}: {err}")
+                continue
+            lot_id = re.sub(r"[^a-zA-Z0-9_\-]", "", item.id)
+            if not lot_id:
+                continue
+            # Выгоду всегда считаем на сервере, значениям от воркера не доверяем
+            profit_rub = max(0, item.market - item.price)
+            profit_pct = round(profit_rub / item.market * 100, 1)
+            tags = json.dumps([str(t)[:30] for t in item.tags[:4]], ensure_ascii=False)
+            await conn.execute(
+                """
+                INSERT INTO dh_lots (id, title, source, city, price, market, profit_rub, profit_pct, tags,
+                                     seller_name, seller_rating, seller_reviews, description, url, first_seen, last_seen)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, NOW(), NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    price = EXCLUDED.price, market = EXCLUDED.market,
+                    profit_rub = EXCLUDED.profit_rub, profit_pct = EXCLUDED.profit_pct,
+                    last_seen = NOW()
+                """,
+                lot_id, item.title, item.source, item.city, item.price, item.market, profit_rub, profit_pct, tags,
+                item.sellerName, item.sellerRating, item.sellerReviews, item.desc, safe_url,
+            )
+            saved += 1
+    return JSONResponse({"status": "ok", "saved": saved})
 
 
 # =====================================================================
-# 7. ИНТЕРФЕЙС LIQUID GLASS (МГНОВЕННЫЕ ЛОТЫ + ЖИВОЙ ТАЙМЕР)
+# 10. ИНТЕРФЕЙС (index.html рядом с main.py)
 # =====================================================================
+_INDEX_PATH = Path(__file__).resolve().parent / "index.html"
+
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    initial_lots_json = json.dumps(VERIFIED_DIRECT_LOTS, ensure_ascii=False)
-    html = """<!DOCTYPE html>
-<html lang="ru" data-theme="dark">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>DealHunter PRO</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    :root {
-      --bg-canvas: #E4E6EC; --bg-app: #F2F3F7;
-      --glass-card: rgba(255, 255, 255, 0.86);
-      --glass-pill: rgba(15, 17, 26, 0.06);
-      --glass-dock: rgba(255, 255, 255, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.9);
-      --glass-stroke: rgba(15, 17, 26, 0.08);
-      --text-primary: #111216; --text-secondary: #5E626E; --text-muted: #969AA7;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.25); --accent-soft: rgba(255, 90, 31, 0.12);
-      --green: #18B259; --green-soft: rgba(24, 178, 89, 0.14);
-    }
-    [data-theme="dark"] {
-      --bg-canvas: #040406; --bg-app: #0A0B0E;
-      --glass-card: rgba(22, 24, 30, 0.78);
-      --glass-pill: rgba(255, 255, 255, 0.07);
-      --glass-dock: rgba(18, 20, 26, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.09);
-      --glass-stroke: rgba(255, 255, 255, 0.07);
-      --text-primary: #F5F6FA; --text-secondary: #9499A6; --text-muted: #5B606E;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.35); --accent-soft: rgba(255, 90, 31, 0.16);
-      --green: #2AD16C; --green-soft: rgba(42, 209, 108, 0.15);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
-    body { background: var(--bg-canvas); color: var(--text-primary); font-family: 'Inter', -apple-system, sans-serif; display: flex; justify-content: center; min-height: 100vh; overscroll-behavior-y: contain; }
-    .t-num { font-family: 'Manrope', 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
-    .phone-shell { width: 100%; max-width: 430px; min-height: 100vh; background: var(--bg-app); position: relative; overflow-x: hidden; padding-bottom: 112px; }
-    .ambient-orb { position: fixed; width: 290px; height: 290px; border-radius: 50%; background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%); top: -90px; right: calc(50% - 210px); pointer-events: none; filter: blur(38px); }
-    .screen-content { position: relative; z-index: 1; padding: 14px 14px 26px; animation: fadeIn 0.2s ease; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-    .spin { animation: spin 0.8s linear infinite; }
-
-    .ptr-bar { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--accent); transition: height 0.18s ease; background: var(--glass-pill); }
-    .glass-card { background: var(--glass-card); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid var(--glass-border); border-radius: 24px; padding: 16px; margin-bottom: 12px; }
-    .top-header { position: sticky; top: 0; z-index: 20; background: var(--glass-dock); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); border-bottom: 1px solid var(--glass-stroke); padding: 12px 16px; }
-
-    .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 6px; }
-    .search-input { width: 100%; height: 38px; padding: 0 34px 0 34px; border-radius: 13px; background: var(--glass-pill); border: 1px solid var(--glass-stroke); color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none; }
-    .search-input:focus { border-color: var(--accent); }
-    .search-icon { position: absolute; left: 11px; top: 11px; color: var(--text-muted); pointer-events: none; }
-    .search-clear { position: absolute; right: 86px; top: 9px; width: 20px; height: 20px; border-radius: 50%; border: none; background: var(--glass-stroke); color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-
-    .pills-scroll { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin-top: 9px; }
-    .pills-scroll::-webkit-scrollbar { display: none; }
-    .cat-pill { height: 31px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--glass-stroke); background: var(--glass-pill); color: var(--text-secondary); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
-    .cat-pill.active { background: var(--text-primary); color: var(--bg-app); border-color: transparent; }
-    .spec-tag { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 9px; background: var(--glass-pill); border: 1px solid var(--glass-stroke); color: var(--text-secondary); font-size: 11px; font-weight: 500; }
-    .profit-pill { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 12px; }
-    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: none; font-family: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
-    .btn-icon { width: 36px; height: 36px; border-radius: 12px; background: var(--glass-pill); border: 1px solid var(--glass-stroke); color: var(--text-primary); }
-    .btn-pill { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 12px; }
-    .btn-large { height: 48px; width: 100%; border-radius: 16px; font-size: 14px; font-weight: 700; }
-    .btn-accent { background: linear-gradient(135deg, #FF5A1F, #FF7A45); color: #FFFFFF; box-shadow: 0 8px 20px -6px var(--accent-glow); }
-    .btn-stars-bot { background: linear-gradient(135deg, rgba(255, 193, 7, 0.16), rgba(255, 90, 31, 0.16)); border: 1px solid rgba(255, 193, 7, 0.45); color: #FFC107; }
-    .btn-glass { background: var(--glass-pill); border: 1px solid var(--glass-border); color: var(--text-primary); }
-    .floating-dock-wrap { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); width: calc(100% - 28px); max-width: 398px; z-index: 35; }
-    .floating-dock { height: 64px; padding: 6px; border-radius: 24px; background: var(--glass-dock); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid var(--glass-border); display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.55); }
-    .dock-btn { border: none; background: transparent; border-radius: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer; }
-    .dock-btn.active { background: var(--glass-pill); color: var(--accent); }
-    .ios-switch { width: 48px; height: 28px; border-radius: 999px; background: var(--glass-pill); border: 1px solid var(--glass-stroke); padding: 3px; cursor: pointer; position: relative; transition: background 0.2s; }
-    .ios-switch.on { background: var(--accent); }
-    .ios-switch-knob { width: 20px; height: 20px; border-radius: 50%; background: #FFFFFF; transition: transform 0.2s; }
-    .ios-switch.on .ios-switch-knob { transform: translateX(20px); }
-    .modal-backdrop { position: fixed; inset: 0; max-width: 430px; margin: 0 auto; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 60; display: flex; align-items: flex-end; }
-    .modal-center { align-items: center; padding: 18px; }
-    .modal-sheet { width: 100%; background: var(--bg-app); border-top: 1px solid var(--glass-border); border-radius: 28px 28px 0 0; padding: 22px 18px 28px; max-height: 85vh; overflow-y: auto; }
-    .modal-card { width: 100%; background: var(--bg-app); border: 1px solid var(--glass-border); border-radius: 28px; padding: 24px 20px; box-shadow: 0 25px 60px rgba(0,0,0,0.65); }
-    .input-glass { width: 100%; height: 44px; padding: 0 14px; border-radius: 14px; background: var(--glass-pill); border: 1px solid var(--glass-border); color: var(--text-primary); font-family: inherit; font-size: 14px; outline: none; margin-bottom: 10px; }
-    .row-between { display: flex; align-items: center; justify-content: space-between; }
-    .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90; background: var(--text-primary); color: var(--bg-app); padding: 10px 18px; border-radius: 99px; font-size: 12px; font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.35); white-space: nowrap; }
-    .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
-    .src-Avito { background: rgba(0, 170, 255, 0.15); color: #29B6F6; }
-    .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
-    .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
-  </style>
-</head>
-<body>
-  <div class="phone-shell" id="shell">
-    <div class="ambient-orb"></div>
-    <div id="ptr-indicator" class="ptr-bar">
-      <i data-lucide="refresh-cw" id="ptr-icon" style="width:15px; height:15px;"></i>
-      <span id="ptr-text">Потяните вниз для обновления...</span>
-    </div>
-    <div id="toast-container"></div>
-    <div id="app"></div>
-  </div>
-
-  <script>
-    const INITIAL_LOTS = __INITIAL_LOTS_JSON__;
-    const tg = window.Telegram ? window.Telegram.WebApp : null;
-    if (tg) { tg.ready(); tg.expand(); }
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const tgUser = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) ? tg.initDataUnsafe.user : null;
-
-    function resolveCurrentUid() {
-      if (tgUser && tgUser.id) return String(tgUser.id);
-      const qUid = urlParams.get('uid');
-      if (qUid && /^\\d+$/.test(qUid)) return qUid;
-      let localUid = localStorage.getItem('dh_Guest_Uid');
-      if (!localUid) {
-        localUid = String(Math.floor(100000000 + Math.random() * 900000000));
-        localStorage.setItem('dh_Guest_Uid', localUid);
-      }
-      return localUid;
-    }
-
-    const CURRENT_UID = resolveCurrentUid();
-    const CURRENT_NAME = tgUser ? (tgUser.first_name || 'Охотник') : 'Охотник';
-    const START_PARAM = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param)
-      ? tg.initDataUnsafe.start_param
-      : (urlParams.get('ref') || urlParams.get('startapp') || '');
-
-    const BUNNY_STARS_LINK = "https://t.me/BunnyStarsBot?startapp=ref_5123484212";
-
-    const state = {
-      theme: 'dark',
-      tab: 'feed',
-      category: 'all',
-      source: 'all',
-      searchQuery: '',
-      isRefreshing: false,
-      lastUpdated: '',
-      detailId: null,
-      showNewMonitor: false,
-      showPaywall: false,
-      legalDoc: null,
-      user: {
-        user_id: CURRENT_UID,
-        name: CURRENT_NAME,
-        trialClaimed: true,
-        subActive: true,
-        subUntil: new Date(Date.now() + 259200 * 1000).toISOString(),
-        secondsLeft: 259200,
-        savedIds: [],
-        refCount: 0,
-        refDaysEarned: 0,
-        refLink: `https://t.me/DealHunterAvito_bot?start=ref_${CURRENT_UID}`
-      },
-      listings: INITIAL_LOTS,
-      monitors: []
-    };
-
-    const fmt = (n) => new Intl.NumberFormat('ru-RU').format(n);
-
-    function buildQueryUrl(path, extraParams = {}) {
-      const refClean = String(START_PARAM).replace('ref_', '').trim();
-      const params = new URLSearchParams({
-        uid: String(CURRENT_UID),
-        name: CURRENT_NAME,
-        ref: /^\\d+$/.test(refClean) ? refClean : '',
-        ...extraParams
-      });
-      return `${path}?${params.toString()}`;
-    }
-
-    function showToast(msg) {
-      const box = document.getElementById('toast-container');
-      box.innerHTML = `<div class="toast">${msg}</div>`;
-      clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => { box.innerHTML = ''; }, 2400);
-    }
-
-    function formatCountdown(sec) {
-      if (!sec || sec <= 0) return 'Истёк';
-      const d = Math.floor(sec / 86400);
-      const h = Math.floor((sec % 86400) / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const s = Math.floor(sec % 60);
-      const pad = (v) => String(v).padStart(2, '0');
-      if (d > 0) return `${d}д ${pad(h)}:${pad(m)}:${pad(s)}`;
-      return `${pad(h)}:${pad(m)}:${pad(s)}`;
-    }
-
-    // Независимый ежесекундный счетчик — тикает всегда без зависаний!
-    setInterval(() => {
-      if (!state.user) return;
-      if (state.user.subUntil) {
-        const diff = Math.floor((new Date(state.user.subUntil).getTime() - Date.now()) / 1000);
-        state.user.secondsLeft = Math.max(0, diff);
-      } else if (state.user.secondsLeft > 0) {
-        state.user.secondsLeft = Math.max(0, state.user.secondsLeft - 1);
-      }
-      state.user.subActive = state.user.secondsLeft > 0;
-
-      const badge = document.getElementById('live-timer-badge');
-      if (badge) {
-        badge.textContent = state.user.subActive ? ('PRO · ' + formatCountdown(state.user.secondsLeft)) : 'PRO истёк';
-      }
-      const profTimer = document.getElementById('profile-timer-val');
-      if (profTimer) {
-        profTimer.textContent = formatCountdown(state.user.secondsLeft);
-      }
-    }, 1000);
-
-    // Свайп вниз (Pull-to-refresh)
-    let touchStartY = 0;
-    let pullDist = 0;
-    window.addEventListener('touchstart', (e) => {
-      if (window.scrollY <= 5 && state.tab === 'feed' && !state.detailId) {
-        touchStartY = e.touches[0].clientY;
-      } else {
-        touchStartY = 0;
-      }
-    }, { passive: true });
-
-    window.addEventListener('touchmove', (e) => {
-      if (!touchStartY) return;
-      const y = e.touches[0].clientY;
-      pullDist = Math.max(0, y - touchStartY);
-      if (pullDist > 10 && window.scrollY <= 5) {
-        const bar = document.getElementById('ptr-indicator');
-        const txt = document.getElementById('ptr-text');
-        if (bar) {
-          bar.style.height = Math.min(54, pullDist * 0.45) + 'px';
-          if (txt) txt.textContent = pullDist > 95 ? 'Отпустите для обновления...' : 'Потяните вниз для обновления...';
-        }
-      }
-    }, { passive: true });
-
-    window.addEventListener('touchend', async () => {
-      const bar = document.getElementById('ptr-indicator');
-      if (pullDist > 95 && state.tab === 'feed' && !state.isRefreshing) {
-        await refreshFeedManual();
-      } else if (bar) {
-        bar.style.height = '0px';
-      }
-      touchStartY = 0;
-      pullDist = 0;
-    });
-
-    async function refreshFeedManual() {
-      const bar = document.getElementById('ptr-indicator');
-      const txt = document.getElementById('ptr-text');
-      state.isRefreshing = true;
-      if (bar) bar.style.height = '46px';
-      if (txt) txt.textContent = 'Сканируем новые лоты...';
-      await loadFeed(true);
-      state.isRefreshing = false;
-      if (bar) bar.style.height = '0px';
-    }
-
-    async function syncState() {
-      render(); // Сразу рисуем стартовые карточки без ожидания!
-      try {
-        const res = await fetch(buildQueryUrl('/api/state'));
-        if (res.ok) {
-          const data = await res.json();
-          state.user = data.user;
-          if (data.user.refLink) {
-            state.user.refLink = data.user.refLink;
-          }
-          state.monitors = data.monitors || [];
-          render();
-          await loadFeed(false);
-        }
-      } catch (e) {
-        render();
-      }
-    }
-
-    async function loadFeed(isManualRefresh = false) {
-      if (!state.user.subActive) {
-        state.listings = [];
-        render();
-        return;
-      }
-      try {
-        const res = await fetch(buildQueryUrl('/api/live-feed', {
-          category: state.category,
-          source: state.source,
-          q: state.searchQuery || ''
-        }));
-        if (res.ok) {
-          const data = await res.json();
-          if (data.items && data.items.length > 0) {
-            state.listings = data.items;
-          }
-          state.lastUpdated = data.updatedAt || '';
-          if (isManualRefresh) showToast(`⚡ Лента обновлена (${state.listings.length} лотов)`);
-        }
-      } catch (e) {}
-      render();
-    }
-
-    function executeSearch() {
-      const inp = document.getElementById('feed-search-input');
-      if (inp) {
-        state.searchQuery = inp.value.trim();
-        loadFeed(true);
-      }
-    }
-
-    function clearSearch() {
-      state.searchQuery = '';
-      loadFeed();
-    }
-
-    async function claimFreeTrial() {
-      try {
-        const res = await fetch(buildQueryUrl('/api/claim-trial'), { method: 'POST' });
-        if (res.ok) {
-          const data = await res.json();
-          state.user = data.user;
-          showToast('🎉 PRO-доступ на 3 дня активирован!');
-          await loadFeed();
-        }
-      } catch (e) {
-        state.user.trialClaimed = true;
-        render();
-      }
-    }
-
-    async function buyProWithStars() {
-      showToast('Создаём счёт Telegram Stars...');
-      try {
-        const res = await fetch(buildQueryUrl('/api/create-invoice'), { method: 'POST' });
-        const data = await res.json();
-        if (data.invoiceUrl) {
-          if (tg && tg.openInvoice) {
-            tg.openInvoice(data.invoiceUrl, async (status) => {
-              if (status === 'paid') {
-                showToast('🎉 Оплата принята! +30 дней PRO активированы');
-                state.showPaywall = false;
-                await syncState();
-              }
-            });
-          } else {
-            window.open(data.invoiceUrl, '_blank');
-          }
-        } else {
-          showToast(data.error || 'Ошибка создания счёта');
-        }
-      } catch (e) {
-        showToast('Ошибка соединения с сервером');
-      }
-    }
-
-    function copyRefLink() {
-      const link = state.user.refLink;
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(link);
-      }
-      showToast('🔗 Реферальная ссылка скопирована!');
-    }
-
-    function shareRefLink() {
-      const link = state.user.refLink;
-      const text = "🔥 Лови радар выгодных товаров Avito, Ozon и Wildberries! Переходи по ссылке и забирай 3 дня PRO бесплатно:";
-      const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
-      openExternalLink(shareUrl);
-    }
-
-    function openExternalLink(url) {
-      if (tg && tg.openTelegramLink && url.startsWith('https://t.me/')) {
-        tg.openTelegramLink(url);
-      } else if (tg && tg.openLink) {
-        tg.openLink(url);
-      } else {
-        window.open(url, '_blank');
-      }
-    }
-
-    async function toggleSaveLot(lotId) {
-      const idx = state.user.savedIds.indexOf(lotId);
-      if (idx >= 0) state.user.savedIds.splice(idx, 1);
-      else state.user.savedIds.push(lotId);
-      render();
-      await fetch(buildQueryUrl('/api/saved'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ savedIds: state.user.savedIds })
-      });
-    }
-
-    async function createMonitorAction() {
-      const t = document.getElementById('m-title').value.trim();
-      const c = document.getElementById('m-city').value.trim() || 'Москва';
-      const s = document.getElementById('m-source').value;
-      const mg = parseInt(document.getElementById('m-margin').value) || 15;
-      if (!t) { showToast('Введите название товара'); return; }
-      const res = await fetch(buildQueryUrl('/api/monitors'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: t, city: c, source: s, minMargin: mg })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        state.showNewMonitor = false;
-        showToast('⚡ Монитор запущен!');
-        render();
-      } else {
-        state.showNewMonitor = false;
-        state.showPaywall = true;
-        render();
-      }
-    }
-
-    async function toggleMonitorAction(mid) {
-      const res = await fetch(buildQueryUrl(`/api/monitors/${mid}/toggle`), { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        render();
-      }
-    }
-
-    async function deleteMonitorAction(mid) {
-      const res = await fetch(buildQueryUrl(`/api/monitors/${mid}`), { method: 'DELETE' });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        showToast('Монитор удалён');
-        render();
-      }
-    }
-
-    function renderLockedState() {
-      return `
-        <div class="glass-card" style="text-align:center; padding: 28px 18px; border-color: rgba(255,90,31,0.35);">
-          <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-            <i data-lucide="lock" style="width:28px; height:28px;"></i>
-          </div>
-          <h2 style="font-size:19px; font-weight:800; margin-bottom:8px;">Доступ к лотам закрыт</h2>
-          <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-            Для просмотра прямых карточек товаров <b>Wildberries, Ozon и Avito</b>, поиска и работы авто-мониторов необходима подписка <b>DealHunter PRO</b>.
-          </p>
-          <button class="btn btn-large btn-accent" style="margin-bottom:10px;" onclick="buyProWithStars()">
-            <i data-lucide="zap" style="width:18px; height:18px;"></i>
-            <span>Активировать PRO · 350 Stars</span>
-          </button>
-          <button class="btn btn-large btn-stars-bot" onclick="openExternalLink('${BUNNY_STARS_LINK}')">
-            <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
-            <span>Купить Telegram Stars со скидкой</span>
-          </button>
-        </div>
-      `;
-    }
-
-    function renderLotCard(item) {
-      const isSaved = state.user.savedIds.includes(item.id);
-      return `
-        <div class="glass-card" onclick="state.detailId='${item.id}'; window.scrollTo(0,0); render();" style="cursor:pointer;">
-          <div class="row-between" style="margin-bottom: 8px;">
-            <div style="display:flex; align-items:center; gap: 7px;">
-              <span class="src-badge src-${item.source}">${item.source}</span>
-              <span style="font-size: 12px; color: var(--text-secondary);">${item.city} · ${item.timeAgo}</span>
-            </div>
-          </div>
-          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${item.title}</h3>
-          <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">
-            ${(item.tags || []).map(t => `<span class="spec-tag"><i data-lucide="${t.icon}" style="width:12px; height:12px; color:var(--accent);"></i>${t.text}</span>`).join('')}
-          </div>
-          <div class="row-between" style="padding: 10px 12px; border-radius: 14px; background: var(--glass-pill); margin-bottom: 12px;">
-            <div>
-              <div class="t-num" style="font-size: 20px; font-weight: 800;">${fmt(item.price)} ₽</div>
-              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Рынок ${fmt(item.market)} ₽</div>
-            </div>
-            <div class="profit-pill t-num">−${item.profitPct}% · ${fmt(item.profitRub)} ₽</div>
-          </div>
-          <div class="row-between">
-            <span style="font-size: 12px; color: var(--text-secondary);">★ ${item.seller.rating} (${item.seller.reviews} отз.)</span>
-            <div style="display:flex; gap:6px;">
-              <button class="btn btn-icon" style="width:34px; height:34px;" onclick="event.stopPropagation(); toggleSaveLot('${item.id}');">
-                <i data-lucide="heart" style="width:15px; height:15px; ${isSaved ? 'fill:var(--accent); stroke:var(--accent);' : ''}"></i>
-              </button>
-              <button class="btn btn-pill btn-accent" style="height:34px; padding:0 13px;" onclick="event.stopPropagation(); openExternalLink('${item.url}');">
-                <span>Забрать лот</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    function render() {
-      const app = document.getElementById('app');
-
-      if (state.detailId) {
-        const item = state.listings.find(x => x.id === state.detailId);
-        if (item) {
-          app.innerHTML = `
-            <div class="top-header row-between">
-              <button class="btn btn-pill btn-glass" onclick="state.detailId = null; render();">
-                <i data-lucide="chevron-left" style="width:16px; height:16px;"></i><span>Назад</span>
-              </button>
-              <span class="src-badge src-${item.source}">${item.source}</span>
-            </div>
-            <div class="screen-content">
-              <div class="glass-card">
-                <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">${item.city} · ${item.timeAgo}</div>
-                <h1 style="font-size:18px; font-weight:800; margin-bottom:12px; line-height:1.35;">${item.title}</h1>
-                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
-                  ${(item.tags || []).map(t => `<span class="spec-tag"><i data-lucide="${t.icon}" style="width:12px; height:12px; color:var(--accent);"></i>${t.text}</span>`).join('')}
-                </div>
-                <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
-                  <div>
-                    <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная медиана: ${fmt(item.market)} ₽</div>
-                  </div>
-                  <div class="profit-pill t-num">−${item.profitPct}%</div>
-                </div>
-                <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); margin-bottom:12px; font-size:12px;">
-                  <b>Продавец:</b> ${item.seller.name} · ★ ${item.seller.rating} (${item.seller.reviews} отзывов)
-                </div>
-                <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${item.desc}</p>
-                <button class="btn btn-large btn-accent" onclick="openExternalLink('${item.url}')">
-                  <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>Открыть карточку на ${item.source}</span>
-                </button>
-              </div>
-            </div>
-          `;
-          lucide.createIcons();
-          return;
-        }
-      }
-
-      let contentHtml = '';
-      const timerBadgeHtml = `
-        <div id="live-timer-badge" onclick="state.showPaywall=true; render();" class="t-num" style="cursor:pointer; padding:5px 10px; border-radius:10px; font-size:11px; font-weight:800; background:${state.user.subActive ? 'var(--green-soft)' : 'var(--accent-soft)'}; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
-          ${state.user.subActive ? ('PRO · ' + formatCountdown(state.user.secondsLeft)) : 'PRO истёк'}
-        </div>
-      `;
-
-      if (state.tab === 'feed') {
-        contentHtml = `
-          <div class="top-header">
-            <div class="row-between">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <div style="width:32px; height:32px; border-radius:10px; background:var(--accent); display:flex; align-items:center; justify-content:center; color:#fff;">
-                  <i data-lucide="radar" style="width:17px; height:17px;"></i>
-                </div>
-                <div>
-                  <div style="font-size:16px; font-weight:800; line-height:1.1;">DealHunter</div>
-                  <div style="font-size:10px; color:var(--text-muted);">Свайп вниз — обновить${state.lastUpdated ? ' · ' + state.lastUpdated : ''}</div>
-                </div>
-              </div>
-              <div style="display:flex; align-items:center; gap:6px;">
-                ${timerBadgeHtml}
-                <button class="btn btn-icon" title="Обновить лоты" onclick="refreshFeedManual()">
-                  <i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i>
-                </button>
-                <button class="btn btn-icon" onclick="state.theme = state.theme === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', state.theme); render();">
-                  <i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i>
-                </button>
-              </div>
-            </div>
-
-            <div class="search-wrap">
-              <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
-              <input
-                type="text"
-                id="feed-search-input"
-                class="search-input"
-                placeholder="Поиск (напр. iPhone 16, RTX 4070, Dyson)..."
-                value="${state.searchQuery.replace(/"/g, '&quot;')}"
-                onkeydown="if(event.key==='Enter') executeSearch();"
-              />
-              ${state.searchQuery ? `<button class="search-clear" onclick="clearSearch()"><i data-lucide="x" style="width:12px; height:12px;"></i></button>` : ''}
-              <button class="btn btn-pill btn-accent" style="height:38px; padding:0 14px;" onclick="executeSearch()">Найти</button>
-            </div>
-
-            <div class="pills-scroll">
-              <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" onclick="state.source='all'; loadFeed();">Все площадки</button>
-              <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" onclick="state.source='Wildberries'; loadFeed();">Wildberries Live</button>
-              <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" onclick="state.source='Ozon'; loadFeed();">Ozon</button>
-              <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" onclick="state.source='Avito'; loadFeed();">Avito</button>
-            </div>
-            <div class="pills-scroll" style="margin-top:6px;">
-              <button class="cat-pill ${state.category === 'all' ? 'active' : ''}" onclick="state.category='all'; state.searchQuery=''; loadFeed();">Все товары</button>
-              <button class="cat-pill ${state.category === 'iphone' ? 'active' : ''}" onclick="state.category='iphone'; state.searchQuery=''; loadFeed();">iPhone</button>
-              <button class="cat-pill ${state.category === 'macbook' ? 'active' : ''}" onclick="state.category='macbook'; state.searchQuery=''; loadFeed();">MacBook</button>
-              <button class="cat-pill ${state.category === 'gpu' ? 'active' : ''}" onclick="state.category='gpu'; state.searchQuery=''; loadFeed();">Видеокарты</button>
-              <button class="cat-pill ${state.category === 'ps5' ? 'active' : ''}" onclick="state.category='ps5'; state.searchQuery=''; loadFeed();">Консоли</button>
-            </div>
-          </div>
-          <div class="screen-content">
-            ${!state.user.subActive ? renderLockedState() : (state.listings.length ? state.listings.map(renderLotCard).join('') : '<div class="glass-card" style="text-align:center;">Лоты загружаются...</div>')}
-          </div>
-        `;
-      }
-
-      if (state.tab === 'monitors') {
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Авто-мониторы</div>
-            <button class="btn btn-pill btn-accent" onclick="if(!state.user.subActive){state.showPaywall=true;}else{state.showNewMonitor=true;} render();">
-              <i data-lucide="plus" style="width:14px; height:14px;"></i><span>Создать</span>
-            </button>
-          </div>
-          <div class="screen-content">
-            ${!state.user.subActive ? renderLockedState() : (
-              state.monitors.length ? state.monitors.map(m => `
-                <div class="glass-card">
-                  <div class="row-between" style="margin-bottom:8px;">
-                    <div>
-                      <div style="font-size:15px; font-weight:800;">${m.title}</div>
-                      <div style="font-size:12px; color:var(--text-secondary);">${m.source === 'all' ? 'WB + Ozon + Avito' : m.source} · ${m.city} · от ${m.minMargin}%</div>
-                    </div>
-                    <div class="ios-switch ${m.active ? 'on' : ''}" onclick="toggleMonitorAction('${m.id}')">
-                      <div class="ios-switch-knob"></div>
-                    </div>
-                  </div>
-                  <div class="row-between" style="padding-top:8px; border-top:1px solid var(--glass-stroke);">
-                    <span style="font-size:12px; color:var(--green); font-weight:600;">⚡ Отправлено в бот: ${m.foundToday}</span>
-                    <button class="btn btn-icon" style="width:30px; height:30px;" onclick="deleteMonitorAction('${m.id}')">
-                      <i data-lucide="trash-2" style="width:14px; height:14px; color:var(--text-secondary);"></i>
-                    </button>
-                  </div>
-                </div>
-              `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать», чтобы бот присылал прямые ссылки на лоты в Telegram!</div>'
-            )}
-          </div>
-        `;
-      }
-
-      if (state.tab === 'saved') {
-        const savedList = state.listings.filter(x => state.user.savedIds.includes(x.id));
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Избранное (${state.user.savedIds.length})</div>
-            ${timerBadgeHtml}
-          </div>
-          <div class="screen-content">
-            ${!state.user.subActive ? renderLockedState() : (savedList.length ? savedList.map(renderLotCard).join('') : '<div class="glass-card" style="text-align:center; padding:28px;">Сохранённых лотов пока нет</div>')}
-          </div>
-        `;
-      }
-
-      if (state.tab === 'profile') {
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Профиль и бонусы</div>
-            ${timerBadgeHtml}
-          </div>
-          <div class="screen-content">
-            <div class="glass-card">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div>
-                  <div style="font-size:17px; font-weight:800;">${state.user.name}</div>
-                  <div style="font-size:12px; color:var(--text-secondary);">Telegram ID: ${state.user.user_id}</div>
-                </div>
-                <span class="profit-pill">${state.user.subActive ? 'PRO АКТИВЕН' : 'FREE'}</span>
-              </div>
-
-              <div style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
-                <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Остаток времени PRO-доступа:</div>
-                <div id="profile-timer-val" class="t-num" style="font-size:20px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
-                  ${formatCountdown(state.user.secondsLeft)}
-                </div>
-              </div>
-
-              <button class="btn btn-large btn-accent" style="margin-bottom:10px;" onclick="buyProWithStars()">
-                <i data-lucide="star" style="width:18px; height:18px;"></i>
-                <span>Продлить PRO (+30 дней) · 350 Stars</span>
-              </button>
-
-              <button class="btn btn-large btn-stars-bot" onclick="openExternalLink('${BUNNY_STARS_LINK}')">
-                <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
-                <span>Пополнить Stars выгодно (BunnyStars)</span>
-              </button>
-            </div>
-
-            <div class="glass-card">
-              <div class="row-between" style="margin-bottom:8px;">
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                    <i data-lucide="users" style="width:17px; height:17px;"></i>
-                  </div>
-                  <div>
-                    <div style="font-size:15px; font-weight:800;">Реферальная программа</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">+2 дня PRO за каждого друга</div>
-                  </div>
-                </div>
-              </div>
-
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin: 12px 0;">
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800;">${state.user.refCount || 0}</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Приглашено друзей</div>
-                </div>
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800; color:var(--green);">+${state.user.refDaysEarned || 0} дн.</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Бонусных дней PRO</div>
-                </div>
-              </div>
-
-              <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); font-size:11px; color:var(--text-secondary); word-break:break-all; margin-bottom:10px;">
-                ${state.user.refLink}
-              </div>
-
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                <button class="btn btn-pill btn-glass" style="height:40px;" onclick="copyRefLink()">
-                  <i data-lucide="copy" style="width:15px; height:15px;"></i>
-                  <span>Скопировать</span>
-                </button>
-                <button class="btn btn-pill btn-accent" style="height:40px;" onclick="shareRefLink()">
-                  <i data-lucide="share-2" style="width:15px; height:15px;"></i>
-                  <span>Пригласить</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="glass-card">
-              <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация (РФ)</div>
-              <div style="display:flex; flex-direction:column; gap:8px;">
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" onclick="state.legalDoc='privacy'; render();">
-                  <span>Политика конфиденциальности (152-ФЗ)</span>
-                  <i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
-                </button>
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" onclick="state.legalDoc='terms'; render();">
-                  <span>Пользовательское соглашение (Публичная оферта)</span>
-                  <i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
-                </button>
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" onclick="state.legalDoc='disclaimer'; render();">
-                  <span>Отказ от ответственности и правообладателям</span>
-                  <i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-
-      let modalHtml = '';
-      if (!state.user.trialClaimed) {
-        modalHtml = `
-          <div class="modal-backdrop modal-center">
-            <div class="modal-card" style="text-align:center;">
-              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-                <i data-lucide="gift" style="width:32px; height:32px;"></i>
-              </div>
-              <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
-              <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
-              <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Мы начислили вам бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b> и авто-уведомлениям в Telegram на 3 дня!
-              </p>
-              <button class="btn btn-large btn-accent" onclick="claimFreeTrial()">
-                <i data-lucide="zap" style="width:18px; height:18px;"></i>
-                <span>Забрать 3 дня PRO бесплатно</span>
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (state.showNewMonitor) {
-        modalHtml = `
-          <div class="modal-backdrop" onclick="state.showNewMonitor = false; render();">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
-                <button class="btn btn-icon" onclick="state.showNewMonitor = false; render();"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что ищем (напр. iPhone 15 Pro)" />
-              <input type="text" id="m-city" class="input-glass" placeholder="Город или регион" value="Москва" />
-              <select id="m-source" class="input-glass">
-                <option value="all">Все площадки (WB + Ozon + Avito)</option>
-                <option value="Wildberries">Только Wildberries</option>
-                <option value="Ozon">Только Ozon</option>
-                <option value="Avito">Только Avito</option>
-              </select>
-              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="18" />
-              <button class="btn btn-large btn-accent" onclick="createMonitorAction()">Запустить мониторинг</button>
-            </div>
-          </div>
-        `;
-      } else if (state.showPaywall) {
-        modalHtml = `
-          <div class="modal-backdrop" onclick="state.showPaywall = false; render();">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <span class="profit-pill">DealHunter PRO</span>
-                <button class="btn btn-icon" onclick="state.showPaywall = false; render();"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <div class="t-num" style="font-size:26px; font-weight:800; margin-bottom:6px;">350 Stars <span style="font-size:13px; color:var(--text-muted);">/ 30 дней</span></div>
-              <p style="font-size:13px; color:var(--text-secondary); line-height:1.45; margin-bottom:16px;">
-                Полный доступ к прямым карточкам товаров Wildberries, Ozon и Avito, живому поиску и мгновенным пуш-уведомлениям в Telegram.
-              </p>
-              <button class="btn btn-large btn-accent" style="margin-bottom:10px;" onclick="buyProWithStars()">
-                <i data-lucide="star" style="width:18px; height:18px;"></i>
-                <span>Оплатить 350 Stars</span>
-              </button>
-              <button class="btn btn-large btn-stars-bot" onclick="openExternalLink('${BUNNY_STARS_LINK}')">
-                <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                <span>Где взять Stars? Купить в BunnyStars</span>
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (state.legalDoc) {
-        const docs = {
-          privacy: {
-            title: 'Политика конфиденциальности (152-ФЗ)',
-            body: '1. Общие положения: Настоящая Политика обработки персональных данных составлена в соответствии с Федеральным законом РФ от 27.07.2006 № 152-ФЗ «О персональных данных».\\n\\n2. Собираемые данные: Сервис обрабатывает исключительно публичный идентификатор аккаунта Telegram (Telegram ID), имя пользователя и технические настройки фильтров внутри мини-приложения.\\n\\n3. Цель обработки: Предоставление доступа к функционалу информационного мониторинга, учет реферальных бонусов и отправка уведомлений через Telegram-бота.\\n\\n4. Защита и удаление: Данные хранятся в защищенной СУБД. Пользователь вправе запросить полное удаление своих данных в любой момент.'
-          },
-          terms: {
-            title: 'Пользовательское соглашение (Оферта)',
-            body: '1. Предмет соглашения: Сервис DealHunter предоставляет Пользователю информационно-аналитический доступ к инструментам агрегации общедоступных карточек товаров и цен в соответствии со ст. 437 ГК РФ.\\n\\n2. Оплата и доступ: Расширенный доступ PRO предоставляется на условиях подписки сроком на 30 календарных дней с использованием внутренней валюты платформы Telegram Stars.\\n\\n3. Реферальная программа: За каждого нового пользователя, перешедшего по персональной ссылке, начисляется 2 бонусных дня подписки PRO.'
-          },
-          disclaimer: {
-            title: 'Отказ от ответственности',
-            body: '1. Информационный характер: DealHunter является независимым поисковым агрегатором и не является официальным приложением или представителем ООО «КЕХ еКоммерц» (Авито), ООО «Интернет Решения» (Ozon) или ООО «РВБ» / «Вайлдберриз».\\n\\n2. Все товарные знаки принадлежат их законным владельцам.\\n\\n3. Администрация сервиса не является стороной сделок купли-продажи и не несет ответственности за действия сторонних продавцов.'
-          }
-        };
-        const curDoc = docs[state.legalDoc];
-        modalHtml = `
-          <div class="modal-backdrop" onclick="state.legalDoc = null; render();">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div style="font-size:15px; font-weight:800;">${curDoc.title}</div>
-                <button class="btn btn-icon" onclick="state.legalDoc = null; render();"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <div style="font-size:12px; color:var(--text-secondary); line-height:1.6; white-space:pre-line; margin-bottom:16px;">${curDoc.body}</div>
-              <button class="btn btn-large btn-glass" onclick="state.legalDoc = null; render();">Понятно</button>
-            </div>
-          </div>
-        `;
-      }
-
-      const dockHtml = `
-        <div class="floating-dock-wrap">
-          <nav class="floating-dock">
-            <button class="dock-btn ${state.tab === 'feed' ? 'active' : ''}" onclick="state.tab='feed'; render();"><i data-lucide="flame" style="width:19px; height:19px;"></i><span>Находки</span></button>
-            <button class="dock-btn ${state.tab === 'monitors' ? 'active' : ''}" onclick="state.tab='monitors'; render();"><i data-lucide="radar" style="width:19px; height:19px;"></i><span>Мониторы</span></button>
-            <button class="dock-btn ${state.tab === 'saved' ? 'active' : ''}" onclick="state.tab='saved'; render();"><i data-lucide="heart" style="width:19px; height:19px;"></i><span>Избранное</span></button>
-            <button class="dock-btn ${state.tab === 'profile' ? 'active' : ''}" onclick="state.tab='profile'; render();"><i data-lucide="user" style="width:19px; height:19px;"></i><span>Профиль</span></button>
-          </nav>
-        </div>
-      `;
-
-      app.innerHTML = contentHtml + modalHtml + dockHtml;
-      lucide.createIcons();
-    }
-
-    syncState();
-  </script>
-</body>
-</html>
-"""
-    return html.replace("__INITIAL_LOTS_JSON__", initial_lots_json)
+    try:
+        html = _INDEX_PATH.read_text(encoding="utf-8")
+    except Exception:
+        return HTMLResponse("index.html не найден рядом с main.py", status_code=500)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
