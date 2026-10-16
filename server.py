@@ -1,32 +1,33 @@
-import asyncio
-import base64
-from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
-import hashlib
-import hmac
-import json
-import logging
 import os
 import re
+import hmac
+import json
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple
-from urllib.parse import parse_qsl, quote, unquote, urlparse
+import base64
+import hashlib
+import logging
+import asyncio
+from collections import OrderedDict
+from typing import Optional, List, Dict, Any, Tuple, Literal
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, unquote, parse_qsl, urlparse
 
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import Command, CommandObject, CommandStart
+import httpx
+import asyncpg
+from fastapi import FastAPI, Request, Header, HTTPException, Depends
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart, CommandObject, Command
 from aiogram.types import (
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo,
     LabeledPrice,
     PreCheckoutQuery,
-    WebAppInfo,
 )
-import asyncpg
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
-import httpx
-from pydantic import BaseModel, Field
 
 # =====================================================================
 # 1. КОНФИГУРАЦИЯ И СЕТЬ
@@ -38,27 +39,16 @@ logging.basicConfig(
 logger = logging.getLogger("dealhunter")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-WEBAPP_URL = (
-    os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com")
-    .strip()
-    .rstrip("/")
-)
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip().rstrip("/")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
 WB_PROXY_URL = os.getenv("WB_PROXY_URL", "").strip() or None
 SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL", "").strip()
-ADMIN_UID = (
-    int(os.getenv("ADMIN_UID", "0"))
-    if os.getenv("ADMIN_UID", "").isdigit()
-    else 0
-)
+ADMIN_UID = int(os.getenv("ADMIN_UID", "0")) if os.getenv("ADMIN_UID", "").isdigit() else 0
 PORT = int(os.getenv("PORT", 10000))
 
 BOT_USERNAME_DEFAULT = "DealHunterAvito_bot"
-BOT_USERNAME_CACHE = (
-    os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lstrip("@")
-    or BOT_USERNAME_DEFAULT
-)
+BOT_USERNAME_CACHE = os.getenv("BOT_USERNAME", BOT_USERNAME_DEFAULT).strip().lstrip("@") or BOT_USERNAME_DEFAULT
 
 STARS_PRICE = 350
 TRIAL_DAYS = 3
@@ -80,53 +70,18 @@ CITY_DEST_MAP: Dict[str, int] = {
 ALLOWED_CITIES = set(CITY_DEST_MAP.keys())
 ALLOWED_SOURCES = {"all", "Wildberries", "Ozon", "Avito"}
 ALLOWED_HOSTS = {
-    "www.wildberries.ru",
-    "wildberries.ru",
-    "www.ozon.ru",
-    "ozon.ru",
-    "www.avito.ru",
-    "avito.ru",
+    "www.wildberries.ru", "wildberries.ru",
+    "www.ozon.ru", "ozon.ru",
+    "www.avito.ru", "avito.ru",
 }
 
 ACCESSORY_STOP_WORDS = (
-    "чехол",
-    "стекло",
-    "пленка",
-    "плёнка",
-    "кабель",
-    "провод",
-    "переходник",
-    "адаптер",
-    "зарядка",
-    "зарядное",
-    "держатель",
-    "ремешок",
-    "наклейка",
-    "брелок",
-    "подставка",
-    "салфетка",
-    "стилус",
-    "коробка от",
-    "муляж",
-    "запчасть",
-    "шлейф",
-    "дисплей для",
-    "экран для",
-    "аккумулятор для",
-    "батарея для",
-    "корпус для",
-    "крышка для",
-    "линза",
-    "защита камеры",
-    "амбушюры",
-    "футляр",
-    "кейс для",
-    "шнурок",
-    "кулер для",
-    "сумка для",
+    "чехол", "стекло", "пленка", "плёнка", "кабель", "провод", "переходник",
+    "адаптер", "держатель", "ремешок", "наклейка", "брелок", "подставка",
+    "салфетка", "стилус", "коробка от", "муляж", "запчасть", "шлейф",
 )
 
-app = FastAPI(title="DealHunter v7.0 Production")
+app = FastAPI(title="DealHunter v8.0 Production")
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,209 +98,169 @@ background_leader_conn: Optional[asyncpg.Connection] = None
 leader_task: Optional[asyncio.Task] = None
 
 # =====================================================================
-# 2. RATE LIMITER И ОГРАНИЧЕННЫЙ LRU-КЭШ
+# 2. RATE LIMITER И LRU-КЭШ
 # =====================================================================
 USER_RATE_BUCKETS: OrderedDict[int, List[float]] = OrderedDict()
-WB_LRU_CACHE: OrderedDict[str, Tuple[float, List[Dict[str, Any]]]] = (
-    OrderedDict()
-)
-WB_CACHE_MAX_SIZE = 200
-WB_CACHE_TTL = 60.0
+WB_LRU_CACHE: OrderedDict[str, Tuple[float, List[Dict[str, Any]]]] = OrderedDict()
+WB_CACHE_MAX_SIZE = 300
+WB_CACHE_TTL = 45.0
 
 
-def check_rate_limit(
-    uid: int, max_requests: int = 35, window_sec: float = 10.0
-):
-  now = time.time()
-  timestamps = USER_RATE_BUCKETS.get(uid, [])
-  timestamps = [t for t in timestamps if now - t < window_sec]
-  if len(timestamps) >= max_requests:
-    raise HTTPException(
-        status_code=429, detail="Слишком много запросов. Подождите пару секунд."
-    )
-  timestamps.append(now)
-  USER_RATE_BUCKETS[uid] = timestamps
-  USER_RATE_BUCKETS.move_to_end(uid)
-  while len(USER_RATE_BUCKETS) > 2000:
-    USER_RATE_BUCKETS.popitem(last=False)
+def check_rate_limit(uid: int, max_requests: int = 40, window_sec: float = 10.0):
+    now = time.time()
+    timestamps = USER_RATE_BUCKETS.get(uid, [])
+    timestamps = [t for t in timestamps if now - t < window_sec]
+    if len(timestamps) >= max_requests:
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Подождите пару секунд.")
+    timestamps.append(now)
+    USER_RATE_BUCKETS[uid] = timestamps
+    USER_RATE_BUCKETS.move_to_end(uid)
+    while len(USER_RATE_BUCKETS) > 2000:
+        USER_RATE_BUCKETS.popitem(last=False)
 
 
 def cache_get_wb(key: str) -> Optional[List[Dict[str, Any]]]:
-  if key not in WB_LRU_CACHE:
-    return None
-  ts, data = WB_LRU_CACHE[key]
-  if time.time() - ts > WB_CACHE_TTL:
-    WB_LRU_CACHE.pop(key, None)
-    return None
-  WB_LRU_CACHE.move_to_end(key)
-  return data
+    if key not in WB_LRU_CACHE:
+        return None
+    ts, data = WB_LRU_CACHE[key]
+    if time.time() - ts > WB_CACHE_TTL:
+        WB_LRU_CACHE.pop(key, None)
+        return None
+    WB_LRU_CACHE.move_to_end(key)
+    return data
 
 
 def cache_set_wb(key: str, data: List[Dict[str, Any]]):
-  WB_LRU_CACHE[key] = (time.time(), data)
-  WB_LRU_CACHE.move_to_end(key)
-  while len(WB_LRU_CACHE) > WB_CACHE_MAX_SIZE:
-    WB_LRU_CACHE.popitem(last=False)
+    WB_LRU_CACHE[key] = (time.time(), data)
+    WB_LRU_CACHE.move_to_end(key)
+    while len(WB_LRU_CACHE) > WB_CACHE_MAX_SIZE:
+        WB_LRU_CACHE.popitem(last=False)
 
 
 # =====================================================================
-# 3. КРИПТОГРАФИЧЕСКАЯ ПРОВЕРКА TELEGRAM INIT DATA (HMAC-SHA256)
+# 3. КРИПТОГРАФИЧЕСКАЯ АВТОРИЗАЦИЯ TELEGRAM (HMAC-SHA256)
 # =====================================================================
 def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
-  if not BOT_TOKEN:
-    raise HTTPException(
-        status_code=500, detail="Сервер не настроен (BOT_TOKEN)"
-    )
-  if not init_data_raw:
-    raise HTTPException(
-        status_code=401,
-        detail="Откройте мини-приложение через кнопку в Telegram-боте",
-    )
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="BOT_TOKEN не настроен на сервере")
+    if not init_data_raw:
+        raise HTTPException(status_code=401, detail="Откройте приложение внутри Telegram через бота")
 
-  try:
-    data_dict = dict(parse_qsl(init_data_raw, keep_blank_values=True))
-  except Exception:
-    raise HTTPException(
-        status_code=401, detail="Некорректный формат данных авторизации"
-    )
+    try:
+        data_dict = dict(parse_qsl(init_data_raw, keep_blank_values=True))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Некорректный формат данных авторизации")
 
-  received_hash = data_dict.pop("hash", None)
-  if not received_hash:
-    raise HTTPException(
-        status_code=401, detail="Отсутствует криптографическая подпись Telegram"
-    )
+    received_hash = data_dict.pop("hash", None)
+    if not received_hash:
+        raise HTTPException(status_code=401, detail="Отсутствует криптографическая подпись Telegram")
 
-  auth_date_raw = data_dict.get("auth_date", "")
-  if not auth_date_raw or not auth_date_raw.isdigit():
-    raise HTTPException(
-        status_code=401, detail="Отсутствует метка времени сессии (auth_date)"
-    )
-  auth_date = int(auth_date_raw)
-  now_ts = int(time.time())
-  if auth_date <= 0 or (now_ts - auth_date) > 86400 * 2:
-    raise HTTPException(
-        status_code=401,
-        detail="Сессия устарела. Перезапустите приложение из бота.",
-    )
+    auth_date_raw = data_dict.get("auth_date", "")
+    if not auth_date_raw or not auth_date_raw.isdigit():
+        raise HTTPException(status_code=401, detail="Отсутствует метка времени сессии (auth_date)")
+    auth_date = int(auth_date_raw)
+    now_ts = int(time.time())
+    if auth_date <= 0 or (now_ts - auth_date) > 86400 * 2:
+        raise HTTPException(status_code=401, detail="Сессия устарела. Перезапустите приложение из бота.")
 
-  data_check_string = "\n".join(
-      f"{k}={v}" for k, v in sorted(data_dict.items())
-  )
-  secret_key = hmac.new(
-      b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256
-  ).digest()
-  calculated_hash = hmac.new(
-      secret_key,
-      data_check_string.encode("utf-8"),
-      hashlib.sha256,
-  ).hexdigest()
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data_dict.items()))
+    secret_key = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+    calculated_hash = hmac.new(
+        secret_key,
+        data_check_string.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
-  if not hmac.compare_digest(calculated_hash, received_hash):
-    raise HTTPException(
-        status_code=401, detail="Подпись Telegram недействительна"
-    )
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        raise HTTPException(status_code=401, detail="Подпись Telegram недействительна")
 
-  user_raw = data_dict.get("user")
-  if not user_raw:
-    raise HTTPException(
-        status_code=401, detail="Данные пользователя отсутствуют в подписи"
-    )
+    user_raw = data_dict.get("user")
+    if not user_raw:
+        raise HTTPException(status_code=401, detail="Данные пользователя отсутствуют в подписи")
 
-  user_obj = json.loads(user_raw)
-  uid = int(user_obj["id"])
-  start_param = data_dict.get("start_param", "")
-  ref_id = None
-  if start_param.startswith("ref_"):
-    r_clean = start_param.replace("ref_", "").strip()
-    if r_clean.isdigit() and int(r_clean) != uid:
-      ref_id = int(r_clean)
+    user_obj = json.loads(user_raw)
+    uid = int(user_obj["id"])
+    start_param = data_dict.get("start_param", "")
+    ref_id = None
+    if start_param.startswith("ref_"):
+        r_clean = start_param.replace("ref_", "").strip()
+        if r_clean.isdigit() and int(r_clean) != uid:
+            ref_id = int(r_clean)
 
-  return {
-      "uid": uid,
-      "first_name": str(user_obj.get("first_name") or "Охотник")[:64],
-      "username": str(user_obj.get("username") or "")[:64],
-      "ref_id": ref_id,
-  }
+    return {
+        "uid": uid,
+        "first_name": str(user_obj.get("first_name") or "Охотник")[:64],
+        "username": str(user_obj.get("username") or "")[:64],
+        "ref_id": ref_id,
+    }
 
 
 async def get_authenticated_user(request: Request) -> Dict[str, Any]:
-  b64_header = request.headers.get("X-Tg-Init-Data-B64", "").strip()
-  if not b64_header:
-    raise HTTPException(
-        status_code=401, detail="Запустите приложение внутри Telegram"
-    )
-  try:
-    decoded_bytes = base64.b64decode(b64_header)
-    init_data_raw = unquote(decoded_bytes.decode("utf-8"))
-  except Exception:
-    raise HTTPException(
-        status_code=401, detail="Ошибка чтения заголовка авторизации"
-    )
+    b64_header = request.headers.get("X-Tg-Init-Data-B64", "").strip()
+    if not b64_header:
+        raise HTTPException(status_code=401, detail="Запустите приложение внутри Telegram")
+    try:
+        decoded_bytes = base64.b64decode(b64_header)
+        init_data_raw = unquote(decoded_bytes.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Ошибка чтения заголовка авторизации")
 
-  auth = verify_telegram_init_data(init_data_raw)
-  check_rate_limit(auth["uid"])
-  return auth
+    auth = verify_telegram_init_data(init_data_raw)
+    check_rate_limit(auth["uid"])
+    return auth
 
 
 # =====================================================================
-# 4. БЕЗОПАСНАЯ ПРОВЕРКА URL И ВРЕМЕНИ
+# 4. БЕЗОПАСНАЯ РАБОТА С URL И ВРЕМЕНЕМ
 # =====================================================================
 def validate_and_clean_url(raw_url: str) -> str:
-  u = str(raw_url or "").strip()
-  if not u or any(
-      ch in u
-      for ch in ("'", '"', "<", ">", " ", "\n", "\r", "\t", "javascript:")
-  ):
-    raise ValueError("URL содержит недопустимые символы")
-  parsed = urlparse(u)
-  if parsed.scheme != "https":
-    raise ValueError("Разрешён только протокол https://")
-  host = (parsed.hostname or "").lower()
-  if host not in ALLOWED_HOSTS:
-    raise ValueError(f"Домен {host} не разрешён")
-  return u
+    u = str(raw_url or "").strip()
+    if not u or any(ch in u for ch in ("'", '"', "<", ">", " ", "\n", "\r", "\t", "javascript:")):
+        raise ValueError("URL содержит недопустимые символы")
+    parsed = urlparse(u)
+    if parsed.scheme != "https":
+        raise ValueError("Разрешён только протокол https://")
+    host = (parsed.hostname or "").lower()
+    if host not in ALLOWED_HOSTS:
+        raise ValueError(f"Домен {host} не разрешён")
+    return u
 
 
 def humanize_time_ago(dt: Optional[datetime]) -> str:
-  if not dt:
-    return "Только что"
-  diff_sec = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
-  if diff_sec < 60:
-    return "Только что"
-  mins = diff_sec // 60
-  if mins < 60:
-    return f"{mins} мин назад"
-  hours = mins // 60
-  return f"{hours} ч назад"
+    if not dt:
+        return "В наличии"
+    diff_sec = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    if diff_sec < 60:
+        return "Только что"
+    mins = diff_sec // 60
+    if mins < 60:
+        return f"{mins} мин назад"
+    hours = mins // 60
+    return f"{hours} ч назад"
 
 
 # =====================================================================
-# 5. POSTGRESQL СЛОЙ (ASYNCPG + АТОМАРНЫЕ ТРАНЗАКЦИИ)
+# 5. POSTGRESQL СЛОЙ (АТОМАРНЫЕ ТРАНЗАКЦИИ + CLAIMED IDS)
 # =====================================================================
 def now_utc() -> datetime:
-  return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def require_db() -> asyncpg.Pool:
-  if not pg_pool:
-    raise HTTPException(
-        status_code=503,
-        detail="База данных PostgreSQL не подключена (DATABASE_URL)",
-    )
-  return pg_pool
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="База данных PostgreSQL не подключена (DATABASE_URL)")
+    return pg_pool
 
 
 async def init_db():
-  global pg_pool
-  if not DATABASE_URL.startswith("postgres"):
-    logger.error("КРИТИЧНО: DATABASE_URL не задан!")
-    return
-  try:
-    pg_pool = await asyncpg.create_pool(
-        DATABASE_URL, min_size=1, max_size=8, command_timeout=15
-    )
-    async with pg_pool.acquire() as conn:
-      await conn.execute("""
+    global pg_pool
+    if not DATABASE_URL.startswith("postgres"):
+        logger.error("КРИТИЧНО: DATABASE_URL не задан или не начинается с postgres!")
+        return
+    try:
+        pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=8, command_timeout=15)
+        async with pg_pool.acquire() as conn:
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS dh_users (
                     user_id BIGINT PRIMARY KEY,
                     first_name TEXT DEFAULT 'Охотник',
@@ -353,6 +268,7 @@ async def init_db():
                     trial_claimed BOOLEAN DEFAULT FALSE,
                     sub_until TIMESTAMPTZ DEFAULT NULL,
                     saved_ids TEXT DEFAULT '[]',
+                    claimed_ids TEXT DEFAULT '[]',
                     referred_by BIGINT DEFAULT NULL,
                     ref_rewarded BOOLEAN DEFAULT FALSE,
                     ref_count INT DEFAULT 0,
@@ -411,48 +327,28 @@ async def init_db():
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT"
-          " DEFAULT NULL;"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_rewarded BOOLEAN"
-          " DEFAULT FALSE;"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT"
-          " DEFAULT 0;"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT"
-          " DEFAULT 0;"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT"
-          " '';"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT"
-          " DEFAULT 0;"
-      )
-      await conn.execute(
-          "ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE"
-          " DEFAULT CURRENT_DATE;"
-      )
-    logger.info("PostgreSQL инициализирован.")
-  except Exception as e:
-    logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS claimed_ids TEXT DEFAULT '[]';")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS referred_by BIGINT DEFAULT NULL;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_rewarded BOOLEAN DEFAULT FALSE;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_count INT DEFAULT 0;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_days_earned INT DEFAULT 0;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0;")
+            await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
+        logger.info("PostgreSQL инициализирован.")
+    except Exception as e:
+        logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
 
 
 async def check_sponsor_membership(uid: int) -> bool:
-  if not SPONSOR_CHANNEL or not bot:
-    return True
-  try:
-    member = await bot.get_chat_member(chat_id=SPONSOR_CHANNEL, user_id=uid)
-    return member.status in ("member", "administrator", "creator")
-  except Exception as e:
-    logger.warning(f"Проверка канала {SPONSOR_CHANNEL} для {uid}: {e}")
-    return True
+    if not SPONSOR_CHANNEL or not bot:
+        return True
+    try:
+        member = await bot.get_chat_member(chat_id=SPONSOR_CHANNEL, user_id=uid)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        logger.warning(f"Проверка канала {SPONSOR_CHANNEL} для {uid}: {e}")
+        return True
 
 
 async def upsert_user_atomic(
@@ -461,110 +357,105 @@ async def upsert_user_atomic(
     username: str,
     candidate_ref_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-  pool = require_db()
-  async with pool.acquire() as conn:
-    async with conn.transaction():
-      valid_referrer = None
-      if candidate_ref_id and candidate_ref_id != uid:
-        ref_exists = await conn.fetchval(
-            "SELECT user_id FROM dh_users WHERE user_id = $1",
-            candidate_ref_id,
-        )
-        if ref_exists:
-          valid_referrer = candidate_ref_id
+    pool = require_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            valid_referrer = None
+            if candidate_ref_id and candidate_ref_id != uid:
+                ref_exists = await conn.fetchval(
+                    "SELECT user_id FROM dh_users WHERE user_id = $1",
+                    candidate_ref_id,
+                )
+                if ref_exists:
+                    valid_referrer = candidate_ref_id
 
-      row = await conn.fetchrow(
-          """
+            row = await conn.fetchrow(
+                """
                 INSERT INTO dh_users (
                     user_id, first_name, username, trial_claimed, sub_until,
-                    saved_ids, referred_by, ref_rewarded, ref_count, ref_days_earned
+                    saved_ids, claimed_ids, referred_by, ref_rewarded, ref_count, ref_days_earned
                 )
-                VALUES ($1, $2, $3, FALSE, NULL, '[]', $4, FALSE, 0, 0)
+                VALUES ($1, $2, $3, FALSE, NULL, '[]', '[]', $4, FALSE, 0, 0)
                 ON CONFLICT (user_id) DO UPDATE
                 SET first_name = EXCLUDED.first_name,
                     username = CASE WHEN EXCLUDED.username != '' THEN EXCLUDED.username ELSE dh_users.username END
                 RETURNING *
                 """,
-          uid,
-          first_name,
-          username,
-          valid_referrer,
-      )
+                uid, first_name, username, valid_referrer,
+            )
 
-  return format_user_row(row)
+    return format_user_row(row)
 
 
 def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
-  now = now_utc()
-  sub_until: Optional[datetime] = row["sub_until"]
-  is_active = bool(sub_until and sub_until > now)
-  seconds_left = int((sub_until - now).total_seconds()) if is_active else 0
-  try:
-    saved_ids = json.loads(row["saved_ids"] or "[]")
-  except Exception:
-    saved_ids = []
+    now = now_utc()
+    sub_until: Optional[datetime] = row["sub_until"]
+    is_active = bool(sub_until and sub_until > now)
+    seconds_left = int((sub_until - now).total_seconds()) if is_active else 0
+    try:
+        saved_ids = json.loads(row["saved_ids"] or "[]")
+    except Exception:
+        saved_ids = []
+    try:
+        claimed_ids = json.loads(row["claimed_ids"] or "[]")
+    except Exception:
+        claimed_ids = []
 
-  cur_month = now.strftime("%Y-%m")
-  ref_month_days = (
-      int(row["ref_month_days"] or 0) if row["ref_month"] == cur_month else 0
-  )
+    cur_month = now.strftime("%Y-%m")
+    ref_month_days = int(row["ref_month_days"] or 0) if row["ref_month"] == cur_month else 0
 
-  return {
-      "user_id": row["user_id"],
-      "name": row["first_name"] or "Охотник",
-      "trialClaimed": bool(row["trial_claimed"]),
-      "subActive": is_active,
-      "subUntil": sub_until.isoformat() if sub_until else None,
-      "secondsLeft": seconds_left,
-      "savedIds": saved_ids,
-      "refCount": row["ref_count"] or 0,
-      "refDaysEarned": row["ref_days_earned"] or 0,
-      "refMonthDays": ref_month_days,
-      "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
-      "botUsername": BOT_USERNAME_CACHE,
-      "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{row['user_id']}",
-  }
+    return {
+        "user_id": row["user_id"],
+        "name": row["first_name"] or "Охотник",
+        "trialClaimed": bool(row["trial_claimed"]),
+        "subActive": is_active,
+        "subUntil": sub_until.isoformat() if sub_until else None,
+        "secondsLeft": seconds_left,
+        "savedIds": saved_ids,
+        "claimedIds": claimed_ids,
+        "refCount": row["ref_count"] or 0,
+        "refDaysEarned": row["ref_days_earned"] or 0,
+        "refMonthDays": ref_month_days,
+        "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
+        "botUsername": BOT_USERNAME_CACHE,
+        "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{row['user_id']}",
+    }
 
 
 async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
-  if SPONSOR_CHANNEL:
-    is_member = await check_sponsor_membership(uid)
-    if not is_member:
-      raise HTTPException(
-          status_code=403,
-          detail=(
-              "Для активации бесплатного доступа подпишитесь на канал"
-              f" {SPONSOR_CHANNEL}"
-          ),
-      )
+    if SPONSOR_CHANNEL:
+        is_member = await check_sponsor_membership(uid)
+        if not is_member:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Для активации бесплатного доступа подпишитесь на канал {SPONSOR_CHANNEL}",
+            )
 
-  pool = require_db()
-  now = now_utc()
-  cur_month = now.strftime("%Y-%m")
-  referrer_to_notify: Optional[int] = None
-  days_awarded_to_ref = 0
-  user_name = "Охотник"
+    pool = require_db()
+    now = now_utc()
+    cur_month = now.strftime("%Y-%m")
+    referrer_to_notify: Optional[int] = None
+    days_awarded_to_ref = 0
+    user_name = "Охотник"
 
-  async with pool.acquire() as conn:
-    async with conn.transaction():
-      row = await conn.fetchrow(
-          "SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE", uid
-      )
-      if not row:
-        raise HTTPException(status_code=404, detail="Профиль не найден")
-      if row["trial_claimed"]:
-        return format_user_row(row)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+            if not row:
+                raise HTTPException(status_code=404, detail="Профиль не найден")
+            if row["trial_claimed"]:
+                return format_user_row(row)
 
-      user_name = row["first_name"] or "Друг"
-      cur_end = row["sub_until"]
-      base_time = cur_end if (cur_end and cur_end > now) else now
-      new_sub_until = base_time + timedelta(days=TRIAL_DAYS)
+            user_name = row["first_name"] or "Друг"
+            cur_end = row["sub_until"]
+            base_time = cur_end if (cur_end and cur_end > now) else now
+            new_sub_until = base_time + timedelta(days=TRIAL_DAYS)
 
-      referred_by = row["referred_by"]
-      ref_rewarded = bool(row["ref_rewarded"])
+            referred_by = row["referred_by"]
+            ref_rewarded = bool(row["ref_rewarded"])
 
-      updated_row = await conn.fetchrow(
-          """
+            updated_row = await conn.fetchrow(
+                """
                 UPDATE dh_users
                 SET trial_claimed = TRUE,
                     sub_until = $2,
@@ -572,31 +463,26 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
                 WHERE user_id = $1
                 RETURNING *
                 """,
-          uid,
-          new_sub_until,
-      )
+                uid, new_sub_until,
+            )
 
-      if referred_by and not ref_rewarded and referred_by != uid:
-        ref_row = await conn.fetchrow(
-            "SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE",
-            referred_by,
-        )
-        if ref_row:
-          r_month = ref_row["ref_month"] or ""
-          r_m_days = (
-              int(ref_row["ref_month_days"] or 0)
-              if r_month == cur_month
-              else 0
-          )
-          available_quota = max(0, MAX_REF_DAYS_PER_MONTH - r_m_days)
-          days_to_give = min(REFERRAL_BONUS_DAYS, available_quota)
+            if referred_by and not ref_rewarded and referred_by != uid:
+                ref_row = await conn.fetchrow(
+                    "SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE",
+                    referred_by,
+                )
+                if ref_row:
+                    r_month = ref_row["ref_month"] or ""
+                    r_m_days = int(ref_row["ref_month_days"] or 0) if r_month == cur_month else 0
+                    available_quota = max(0, MAX_REF_DAYS_PER_MONTH - r_m_days)
+                    days_to_give = min(REFERRAL_BONUS_DAYS, available_quota)
 
-          if days_to_give > 0:
-            r_end = ref_row["sub_until"]
-            r_base = r_end if (r_end and r_end > now) else now
-            r_new_end = r_base + timedelta(days=days_to_give)
-            await conn.execute(
-                """
+                    if days_to_give > 0:
+                        r_end = ref_row["sub_until"]
+                        r_base = r_end if (r_end and r_end > now) else now
+                        r_new_end = r_base + timedelta(days=days_to_give)
+                        await conn.execute(
+                            """
                             UPDATE dh_users
                             SET sub_until = $2,
                                 ref_count = COALESCE(ref_count, 0) + 1,
@@ -605,375 +491,173 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
                                 ref_month_days = $5
                             WHERE user_id = $1
                             """,
-                referred_by,
-                r_new_end,
-                days_to_give,
-                cur_month,
-                r_m_days + days_to_give,
-            )
-            referrer_to_notify = referred_by
-            days_awarded_to_ref = days_to_give
-          else:
-            await conn.execute(
-                "UPDATE dh_users SET ref_count = COALESCE(ref_count, 0) + 1"
-                " WHERE user_id = $1",
-                referred_by,
-            )
+                            referred_by, r_new_end, days_to_give, cur_month, r_m_days + days_to_give,
+                        )
+                        referrer_to_notify = referred_by
+                        days_awarded_to_ref = days_to_give
+                    else:
+                        await conn.execute(
+                            "UPDATE dh_users SET ref_count = COALESCE(ref_count, 0) + 1 WHERE user_id = $1",
+                            referred_by,
+                        )
 
-  if referrer_to_notify and bot and days_awarded_to_ref > 0:
-    try:
-      await bot.send_message(
-          referrer_to_notify,
-          f"🎉 <b>Реферал подтверждён: {user_name}!</b>\n\n"
-          f"Друг запустил приложение и активировал доступ.\n"
-          f"🎁 Вам начислено <b>+{days_awarded_to_ref} дн. подписки DealHunter"
-          " PRO</b>!",
-          parse_mode="HTML",
-      )
-    except Exception as e:
-      logger.warning(f"Ошибка уведомления реферера {referrer_to_notify}: {e}")
+    if referrer_to_notify and bot and days_awarded_to_ref > 0:
+        try:
+            await bot.send_message(
+                referrer_to_notify,
+                f"🎉 <b>Реферал подтверждён: {user_name}!</b>\n\n"
+                f"Друг запустил приложение и активировал доступ.\n"
+                f"🎁 Вам начислено <b>+{days_awarded_to_ref} дн. подписки DealHunter PRO</b>!",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка уведомления реферера {referrer_to_notify}: {e}")
 
-  return format_user_row(updated_row)
+    return format_user_row(updated_row)
 
 
 # =====================================================================
-# 6. ЖИВОЙ ПАРСЕР + ВИТРИНА ЛОТОВ (ЛОТЫ И ПОИСК ЕСТЬ ВСЕГДА)
+# 6. ЧЕСТНЫЙ МУЛЬТИ-ПОИСК WILDBERRIES (ЛЮБЫЕ ТОВАРЫ БЕЗ ЗАГЛУШЕК)
 # =====================================================================
 DEFAULT_QUERIES_BY_CATEGORY = {
-    "all": "смартфон Xiaomi",
-    "xiaomi": "смартфон Xiaomi Redmi POCO",
-    "iphone": "Apple iPhone 15 16",
-    "macbook": "ноутбук Apple MacBook",
-    "gpu": "видеокарта GeForce RTX",
-    "ps5": "консоль PlayStation 5",
+    "all": "смартфон",
+    "electronics": "ноутбук планшет смартфон",
+    "auto": "видеорегистратор автотовары компрессор",
+    "home": "робот пылесос увлажнитель кофемашина",
+    "clothing": "кроссовки куртка худи",
+    "toys": "конструктор радиоуправляемая игрушка",
 }
-
-CURATED_VERIFIED_CATALOG: List[Dict[str, Any]] = [
-    {
-        "id": "wb_252295571",
-        "title": "Смартфон Apple iPhone 16 Pro 256GB Natural Titanium",
-        "category": "iphone",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Выборка: 14 шт.",
-        "price": 98500,
-        "market": 114900,
-        "profitRub": 16400,
-        "profitPct": 14.3,
-        "tags": ["Арт. 252295571", "256 ГБ", "★ 4.9 (640)"],
-        "seller": {"name": "Apple Flagship", "rating": 4.9, "reviews": 640},
-        "desc": (
-            "Розничное предложение каталога Wildberries. Сравнение выполнено"
-            " внутри однородного кластера iPhone 16 Pro 256GB (медиана группы:"
-            " 114 900 ₽)."
-        ),
-        "url": "https://www.wildberries.ru/catalog/252295571/detail.aspx",
-    },
-    {
-        "id": "wb_218492014",
-        "title": "Смартфон Xiaomi Redmi Note 13 Pro+ 5G 12/512GB Черный",
-        "category": "xiaomi",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Выборка: 22 шт.",
-        "price": 28400,
-        "market": 34900,
-        "profitRub": 6500,
-        "profitPct": 18.6,
-        "tags": ["Арт. 218492014", "12/512 ГБ", "★ 4.9 (920)"],
-        "seller": {"name": "Xiaomi Official", "rating": 4.9, "reviews": 920},
-        "desc": (
-            "Глобальная версия Xiaomi Redmi Note 13 Pro+ 5G в максимальной"
-            " памяти 12/512 ГБ. Цена ниже медианы однородной выборки на"
-            " 6 500 ₽."
-        ),
-        "url": "https://www.wildberries.ru/catalog/218492014/detail.aspx",
-    },
-    {
-        "id": "wb_224910385",
-        "title": "Смартфон Xiaomi POCO X6 Pro 5G 12/512GB Серый",
-        "category": "xiaomi",
-        "source": "Wildberries",
-        "city": "Санкт-Петербург",
-        "timeAgo": "В наличии · Выборка: 19 шт.",
-        "price": 24900,
-        "market": 29800,
-        "profitRub": 4900,
-        "profitPct": 16.4,
-        "tags": ["Арт. 224910385", "Dimensity 8300", "★ 4.9 (1340)"],
-        "seller": {"name": "POCO Store", "rating": 4.9, "reviews": 1340},
-        "desc": (
-            "Смартфон POCO X6 Pro 12/512 ГБ (Global Version). Расчёт отклонения"
-            " выполнен среди 19 предложений данной модификации."
-        ),
-        "url": "https://www.wildberries.ru/catalog/224910385/detail.aspx",
-    },
-    {
-        "id": "oz_1429803951",
-        "title": "Ноутбук Apple MacBook Air 13 M3 (16 ГБ / 512 ГБ SSD)",
-        "category": "macbook",
-        "source": "Ozon",
-        "city": "Москва",
-        "timeAgo": "В наличии · Выборка: 11 шт.",
-        "price": 99900,
-        "market": 119000,
-        "profitRub": 19100,
-        "profitPct": 16.1,
-        "tags": ["Apple M3", "16/512 ГБ", "★ 4.9 (418)"],
-        "seller": {"name": "Ozon Express", "rating": 4.9, "reviews": 418},
-        "desc": (
-            "Ноутбук Apple MacBook Air 13 на чипе M3 в конфигурации 16/512 ГБ."
-            " Прямая карточка товара на маркетплейсе Ozon."
-        ),
-        "url": "https://www.ozon.ru/product/noutbuk-apple-macbook-air-13-m3-16-512-gb-1429803951/",
-    },
-    {
-        "id": "oz_1398451204",
-        "title": "Видеокарта Palit GeForce RTX 4070 Super Dual 12 ГБ GDDR6X",
-        "category": "gpu",
-        "source": "Ozon",
-        "city": "Москва",
-        "timeAgo": "В наличии · Выборка: 15 шт.",
-        "price": 54900,
-        "market": 64900,
-        "profitRub": 10000,
-        "profitPct": 15.4,
-        "tags": ["12 ГБ GDDR6X", "Гарантия 3г", "★ 4.9 (530)"],
-        "seller": {"name": "Ситилинк", "rating": 4.9, "reviews": 530},
-        "desc": (
-            "Видеокарта Palit GeForce RTX 4070 SUPER Dual 12GB. Отклонение от"
-            " медианной цены однородной выборки составляет −15.4%."
-        ),
-        "url": "https://www.ozon.ru/product/videokarta-palit-geforce-rtx-4070-super-dual-12-gb-1398451204/",
-    },
-    {
-        "id": "wb_195462112",
-        "title": "Игровая консоль Sony PlayStation 5 Slim 1TB с дисководом",
-        "category": "ps5",
-        "source": "Wildberries",
-        "city": "Казань",
-        "timeAgo": "В наличии · Выборка: 16 шт.",
-        "price": 42500,
-        "market": 49900,
-        "profitRub": 7400,
-        "profitPct": 14.8,
-        "tags": ["Арт. 195462112", "Slim 1TB", "★ 4.9 (2150)"],
-        "seller": {"name": "GameZone", "rating": 4.9, "reviews": 2150},
-        "desc": (
-            "Консоль Sony PlayStation 5 Slim 1 ТБ с дисководом Blu-ray"
-            " (CFI-2000A01). Сравнение с медианой по 16 предложениям."
-        ),
-        "url": "https://www.wildberries.ru/catalog/195462112/detail.aspx",
-    },
-    {
-        "id": "av_4189205412",
-        "title": "iPhone 15 Pro Max 256 ГБ Natural Titanium (АКБ 98%)",
-        "category": "iphone",
-        "source": "Avito",
-        "city": "Москва",
-        "timeAgo": "Проверенное объявление",
-        "price": 79000,
-        "market": 94000,
-        "profitRub": 15000,
-        "profitPct": 16.0,
-        "tags": ["АКБ 98%", "Без ремонтов", "Полный комплект"],
-        "seller": {"name": "Алексей", "rating": 5.0, "reviews": 64},
-        "desc": (
-            "Вторичный рынок Avito. Состояние нового устройства, полный"
-            " заводской комплект, проверка перед покупкой."
-        ),
-        "url": "https://www.avito.ru/moskva/telefony/iphone_15_pro_max_256gb_natural_titanium_4189205412",
-    },
-]
 
 
 def is_accessory_or_junk(title: str, query_text: str) -> bool:
-  t_low = title.lower()
-  q_low = query_text.lower()
-  for stop_w in ACCESSORY_STOP_WORDS:
-    if stop_w in t_low and stop_w not in q_low:
-      return True
-  return False
+    t_low = title.lower()
+    q_low = query_text.lower()
+    for stop_w in ACCESSORY_STOP_WORDS:
+        if stop_w in t_low and stop_w not in q_low:
+            return True
+    return False
 
 
-def extract_model_cluster_key(title: str) -> str:
-  t_low = title.lower().replace("гб", "gb").replace("тб", "tb")
-  mem_match = re.search(
-      r"\b(64|128|256|512|1024)\s*gb\b|\b(1|2)\s*tb\b", t_low
-  )
-  mem_key = mem_match.group(0).replace(" ", "") if mem_match else "std"
-  mods = []
-  for mod in (
-      "pro",
-      "max",
-      "plus",
-      "ultra",
-      "slim",
-      "ti",
-      "super",
-      "mini",
-      "fe",
-  ):
-    if re.search(rf"\b{mod}\b", t_low):
-      mods.append(mod)
-  mod_key = "_".join(mods) if mods else "base"
-  return f"{mod_key}:{mem_key}"
+async def fetch_wb_honest_market(query_text: str, city: str = "Москва") -> List[Dict[str, Any]]:
+    """Честный поиск Wildberries по любым товарам (электроника, одежда, дом, игрушки)."""
+    q_clean = query_text.strip() or "смартфон"
+    dest = CITY_DEST_MAP.get(city, -1257786)
+    cache_key = f"{q_clean.lower()}::{dest}"
 
+    cached = cache_get_wb(cache_key)
+    if cached is not None:
+        return cached
 
-async def fetch_wb_clustered(
-    query_text: str, city: str = "Москва"
-) -> List[Dict[str, Any]]:
-  q_clean = query_text.strip() or "смартфон"
-  dest = CITY_DEST_MAP.get(city, -1257786)
-  cache_key = f"{q_clean.lower()}::{dest}"
+    endpoints = [
+        f"https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
+        f"https://search.wb.ru/exactmatch/ru/common/v7/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
+        f"https://search.wb.ru/exactmatch/ru/common/v5/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+    }
 
-  cached = cache_get_wb(cache_key)
-  if cached is not None:
-    return cached
+    products = []
+    client_kwargs: Dict[str, Any] = {"timeout": 4.0}
+    if WB_PROXY_URL:
+        client_kwargs["proxy"] = WB_PROXY_URL
 
-  endpoints = [
-      f"https://search.wb.ru/exactmatch/ru/common/v18/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
-      f"https://search.wb.ru/exactmatch/ru/common/v7/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
-      f"https://search.wb.ru/exactmatch/ru/common/v5/search?ab_testing=false&appType=1&curr=rub&dest={dest}&query={quote(q_clean)}&resultset=catalog&sort=popular&spp=30",
-  ]
-  headers = {
-      "User-Agent": (
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,"
-          " like Gecko) Chrome/128.0.0.0 Safari/537.36"
-      ),
-      "Accept": "*/*",
-  }
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        for ep in endpoints:
+            try:
+                res = await client.get(ep, headers=headers)
+                if res.status_code == 200:
+                    data = json.loads(res.text)
+                    products = data.get("data", {}).get("products", []) or data.get("products", [])
+                    if products:
+                        break
+            except Exception:
+                continue
 
-  products = []
-  client_kwargs: Dict[str, Any] = {"timeout": 3.8}
-  if WB_PROXY_URL:
-    client_kwargs["proxy"] = WB_PROXY_URL
+    if not products:
+        return []
 
-  async with httpx.AsyncClient(**client_kwargs) as client:
-    for ep in endpoints:
-      try:
-        res = await client.get(ep, headers=headers)
-        if res.status_code == 200:
-          data = json.loads(res.text)
-          products = data.get("data", {}).get("products", []) or data.get(
-              "products", []
-          )
-          if products:
-            break
-      except Exception:
-        continue
+    def get_price_and_qty(p: dict) -> Tuple[int, int]:
+        sizes = p.get("sizes") or []
+        qty = int(p.get("totalQuantity", 1))
+        if sizes and isinstance(sizes, list):
+            for sz in sizes:
+                pr = sz.get("price", {})
+                val = pr.get("product") or pr.get("total") or pr.get("basic") or 0
+                if val > 0:
+                    return int(val / 100), qty
+        sale_u = p.get("salePriceU") or p.get("priceU") or 0
+        return int(sale_u / 100), qty
 
-  if not products:
-    return []
+    candidates = []
+    for p in products:
+        pid = p.get("id")
+        if not pid:
+            continue
+        price_rub, qty = get_price_and_qty(p)
+        if price_rub < 150 or qty <= 0:
+            continue
+        name = str(p.get("name") or q_clean).strip()
+        brand = str(p.get("brand") or "").strip()
+        full_title = f"{brand} {name}".strip() if (brand and brand.lower() not in name.lower()) else name
+        if is_accessory_or_junk(full_title, q_clean):
+            continue
+        candidates.append((price_rub, full_title, p))
 
-  def get_price_and_qty(p: dict) -> Tuple[int, int]:
-    sizes = p.get("sizes") or []
-    qty = int(p.get("totalQuantity", 1))
-    if sizes and isinstance(sizes, list):
-      for sz in sizes:
-        pr = sz.get("price", {})
-        val = pr.get("product") or pr.get("total") or pr.get("basic") or 0
-        if val > 0:
-          return int(val / 100), qty
-    sale_u = p.get("salePriceU") or p.get("priceU") or 0
-    return int(sale_u / 100), qty
+    if len(candidates) < 2:
+        return []
 
-  candidates = []
-  for p in products:
-    pid = p.get("id")
-    if not pid:
-      continue
-    price_rub, qty = get_price_and_qty(p)
-    if price_rub < 250 or qty <= 0:
-      continue
-    name = str(p.get("name") or q_clean).strip()
-    brand = str(p.get("brand") or "").strip()
-    full_title = (
-        f"{brand} {name}".strip()
-        if (brand and brand.lower() not in name.lower())
-        else name
-    )
-    if is_accessory_or_junk(full_title, q_clean):
-      continue
-    candidates.append((price_rub, full_title, p))
+    all_prices = sorted(c[0] for c in candidates)
+    # Честная медиана цен реальной выдачи WB
+    median_price = all_prices[len(all_prices) // 2]
+    sample_size = len(candidates)
 
-  if len(candidates) < 2:
-    return []
+    items: List[Dict[str, Any]] = []
+    for price_rub, full_title, p in candidates[:25]:
+        pid = int(p["id"])
+        rating = float(p.get("reviewRating") or p.get("rating") or 4.8)
+        feedbacks = int(p.get("feedbacks") or 10)
+        supplier = str(p.get("supplier") or p.get("brand") or "Продавец WB")
 
-  all_prices_sorted = sorted(c[0] for c in candidates)
-  q75_price = all_prices_sorted[int(len(all_prices_sorted) * 0.75)]
-  min_realistic_price = int(q75_price * 0.35) if q75_price > 5000 else 250
-  filtered_candidates = [c for c in candidates if c[0] >= min_realistic_price]
-  if len(filtered_candidates) < 2:
-    filtered_candidates = candidates
+        # Честная оценка выгоды без выдуманных коэффициентов
+        if price_rub < median_price:
+            diff_rub = median_price - price_rub
+            diff_pct = round((diff_rub / median_price) * 100, 1)
+        else:
+            diff_rub = 0
+            diff_pct = 0.0
 
-  clusters: Dict[str, List[int]] = {}
-  for price_rub, full_title, _ in filtered_candidates:
-    ckey = extract_model_cluster_key(full_title)
-    clusters.setdefault(ckey, []).append(price_rub)
+        items.append({
+            "id": f"wb_{pid}",
+            "title": full_title[:120],
+            "source": "Wildberries",
+            "city": city,
+            "timeAgo": "В наличии · Live",
+            "price": price_rub,
+            "market": median_price,
+            "profitRub": diff_rub,
+            "profitPct": diff_pct,
+            "tags": [
+                f"Арт. {pid}",
+                f"★ {rating} ({feedbacks})",
+                f"Выборка: {sample_size} шт.",
+            ],
+            "seller": {
+                "name": supplier[:50],
+                "rating": rating,
+                "reviews": feedbacks,
+            },
+            "desc": (
+                f"Настоящая карточка каталога Wildberries (артикул {pid}). "
+                f"Розничная цена: {price_rub:,} ₽. Реальная медиана цен по выборке из {sample_size} товаров: {median_price:,} ₽ ({city})."
+            ).replace(",", " "),
+            "url": f"https://www.wildberries.ru/catalog/{pid}/detail.aspx",
+            "createdAtTs": int(time.time()),
+        })
 
-  global_sorted = sorted(c[0] for c in filtered_candidates)
-  global_median = global_sorted[len(global_sorted) // 2]
-
-  items: List[Dict[str, Any]] = []
-  for price_rub, full_title, p in filtered_candidates[:16]:
-    pid = int(p["id"])
-    ckey = extract_model_cluster_key(full_title)
-    cluster_prices = sorted(clusters.get(ckey, []))
-
-    if len(cluster_prices) >= 3:
-      ref_median = cluster_prices[len(cluster_prices) // 2]
-      sample_size = len(cluster_prices)
-    else:
-      ref_median = global_median
-      sample_size = len(filtered_candidates)
-
-    if ref_median <= price_rub:
-      ref_median = int(price_rub * 1.15)
-
-    diff_rub = max(0, ref_median - price_rub)
-    diff_pct = (
-        round((diff_rub / ref_median) * 100, 1) if ref_median > 0 else 0.0
-    )
-    if diff_pct > 65.0:
-      continue
-
-    rating = float(p.get("reviewRating") or p.get("rating") or 4.8)
-    feedbacks = int(p.get("feedbacks") or 25)
-    supplier = str(p.get("supplier") or p.get("brand") or "Продавец WB")
-
-    items.append({
-        "id": f"wb_{pid}",
-        "title": full_title[:120],
-        "category": "all",
-        "source": "Wildberries",
-        "city": city,
-        "timeAgo": "В наличии · Live",
-        "price": price_rub,
-        "market": ref_median,
-        "profitRub": diff_rub,
-        "profitPct": diff_pct,
-        "tags": [
-            f"Арт. {pid}",
-            f"★ {rating} ({feedbacks})",
-            f"Выборка {sample_size} шт.",
-        ],
-        "seller": {
-            "name": supplier[:50],
-            "rating": rating,
-            "reviews": feedbacks,
-        },
-        "desc": (
-            f"Живая карточка каталога Wildberries (артикул {pid}). Текущая цена"
-            f" продавца ({price_rub:,} ₽) ниже медианной цены однородной"
-            f" выборки ({ref_median:,} ₽, регион: {city})."
-        ).replace(",", " "),
-        "url": f"https://www.wildberries.ru/catalog/{pid}/detail.aspx",
-    })
-
-  items.sort(key=lambda x: x["profitPct"], reverse=True)
-  cache_set_wb(cache_key, items)
-  return items
+    cache_set_wb(cache_key, items)
+    return items
 
 
 async def fetch_db_external_lots(
@@ -981,60 +665,54 @@ async def fetch_db_external_lots(
     city: str = "Москва",
     search_query: str = "",
 ) -> Tuple[bool, List[Dict[str, Any]]]:
-  if not pg_pool:
-    return False, []
-  async with pg_pool.acquire() as conn:
-    await conn.execute(
-        "DELETE FROM dh_lots WHERE created_at < NOW() - INTERVAL"
-        f" '{LOT_TTL_HOURS} hours'"
-    )
-    total_ext = await conn.fetchval("SELECT COUNT(*) FROM dh_lots")
-    rows = await conn.fetch(
-        "SELECT * FROM dh_lots ORDER BY created_at DESC LIMIT 100"
-    )
+    if not pg_pool:
+        return False, []
+    async with pg_pool.acquire() as conn:
+        await conn.execute(
+            f"DELETE FROM dh_lots WHERE created_at < NOW() - INTERVAL '{LOT_TTL_HOURS} hours'"
+        )
+        total_ext = await conn.fetchval("SELECT COUNT(*) FROM dh_lots")
+        rows = await conn.fetch("SELECT * FROM dh_lots ORDER BY created_at DESC LIMIT 100")
 
-  results = []
-  q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
-  for r in rows:
-    if source != "all" and r["source"].lower() != source.lower():
-      continue
-    if city and city not in r["city"] and r["city"] != "Вся РФ":
-      continue
-    if q_words:
-      text_blob = (r["title"] + " " + r["description"]).lower()
-      if not all(w in text_blob for w in q_words):
-        continue
+    results = []
+    q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
+    for r in rows:
+        if source != "all" and r["source"].lower() != source.lower():
+            continue
+        if city and city not in r["city"] and r["city"] != "Вся РФ":
+            continue
+        if q_words:
+            text_blob = (r["title"] + " " + r["description"]).lower()
+            if not all(w in text_blob for w in q_words):
+                continue
 
-    try:
-      tags_list = (
-          json.loads(r["tags"])
-          if isinstance(r["tags"], str)
-          else list(r["tags"] or [])
-      )
-    except Exception:
-      tags_list = []
+        try:
+            tags_list = json.loads(r["tags"]) if isinstance(r["tags"], str) else list(r["tags"] or [])
+        except Exception:
+            tags_list = []
 
-    results.append({
-        "id": r["id"],
-        "title": r["title"],
-        "source": r["source"],
-        "city": r["city"],
-        "timeAgo": humanize_time_ago(r["created_at"]),
-        "price": r["price"],
-        "market": r["market"],
-        "profitRub": r["profit_rub"],
-        "profitPct": r["profit_pct"],
-        "tags": tags_list,
-        "seller": {
-            "name": r["seller_name"],
-            "rating": r["seller_rating"],
-            "reviews": r["seller_reviews"],
-        },
-        "desc": r["description"],
-        "url": r["url"],
-    })
+        results.append({
+            "id": r["id"],
+            "title": r["title"],
+            "source": r["source"],
+            "city": r["city"],
+            "timeAgo": humanize_time_ago(r["created_at"]),
+            "price": r["price"],
+            "market": r["market"],
+            "profitRub": r["profit_rub"],
+            "profitPct": r["profit_pct"],
+            "tags": tags_list,
+            "seller": {
+                "name": r["seller_name"],
+                "rating": r["seller_rating"],
+                "reviews": r["seller_reviews"],
+            },
+            "desc": r["description"],
+            "url": r["url"],
+            "createdAtTs": int(r["created_at"].timestamp()),
+        })
 
-  return bool(total_ext and total_ext > 0), results
+    return bool(total_ext and total_ext > 0), results
 
 
 async def build_honest_feed(
@@ -1042,75 +720,66 @@ async def build_honest_feed(
     source: str = "all",
     search_query: str = "",
     city: str = "Москва",
+    sort_by: str = "profit",
+    excluded_ids: Optional[List[str]] = None,
 ) -> Tuple[bool, List[Dict[str, Any]]]:
-  city_clean = city if city in ALLOWED_CITIES else "Москва"
-  source_clean = source if source in ALLOWED_SOURCES else "all"
-  q_clean = search_query.strip()
-  target_query = (
-      q_clean
-      if q_clean
-      else DEFAULT_QUERIES_BY_CATEGORY.get(category, "смартфон Xiaomi")
-  )
+    city_clean = city if city in ALLOWED_CITIES else "Москва"
+    source_clean = source if source in ALLOWED_SOURCES else "all"
+    q_clean = search_query.strip()
+    target_query = q_clean if q_clean else DEFAULT_QUERIES_BY_CATEGORY.get(category, "смартфон")
 
-  has_external_lots, ext_items = await fetch_db_external_lots(
-      source=source_clean,
-      city=city_clean,
-      search_query=q_clean,
-  )
-
-  combined = list(ext_items)
-  if source_clean in ("all", "Wildberries"):
-    wb_items = await fetch_wb_clustered(
-        query_text=target_query, city=city_clean
+    has_external_lots, ext_items = await fetch_db_external_lots(
+        source=source_clean,
+        city=city_clean,
+        search_query=q_clean,
     )
-    combined.extend(wb_items)
 
-  if not combined:
-    fallback = list(CURATED_VERIFIED_CATALOG)
-    if source_clean != "all":
-      fallback = [
-          x for x in fallback if x["source"].lower() == source_clean.lower()
-      ]
-    if category != "all" and not q_clean:
-      fallback = [x for x in fallback if x.get("category") == category]
-    if q_clean:
-      q_words = [w.lower() for w in q_clean.split() if len(w) >= 2]
-      matched = [
-          x
-          for x in fallback
-          if all(
-              w in x["title"].lower() or w in x["desc"].lower() for w in q_words
-          )
-      ]
-      fallback = matched if matched else fallback
-    combined.extend(fallback)
+    combined = list(ext_items)
+    if source_clean in ("all", "Wildberries"):
+        wb_items = await fetch_wb_honest_market(query_text=target_query, city=city_clean)
+        combined.extend(wb_items)
 
-  return has_external_lots, combined
+    # Исключаем лоты, которые пользователь уже забрал!
+    if excluded_ids:
+        ex_set = set(excluded_ids)
+        combined = [x for x in combined if x["id"] not in ex_set]
+
+    # Сортировка по запросу пользователя (по марже, по цене, по дате)
+    if sort_by == "price_asc":
+        combined.sort(key=lambda x: x["price"])
+    elif sort_by == "price_desc":
+        combined.sort(key=lambda x: x["price"], reverse=True)
+    elif sort_by == "date":
+        combined.sort(key=lambda x: x.get("createdAtTs", 0), reverse=True)
+    else:  # По марже / выгоде (profit)
+        combined.sort(key=lambda x: (x["profitPct"], x["profitRub"]), reverse=True)
+
+    return has_external_lots, combined
 
 
 # =====================================================================
 # 7. СКАНЕР МОНИТОРОВ
 # =====================================================================
 async def monitor_scanner_loop():
-  await asyncio.sleep(12)
-  while True:
-    try:
-      if not bot or not pg_pool:
-        await asyncio.sleep(30)
-        continue
+    await asyncio.sleep(12)
+    while True:
+        try:
+            if not bot or not pg_pool:
+                await asyncio.sleep(30)
+                continue
 
-      async with pg_pool.acquire() as conn:
-        await conn.execute("""
+            async with pg_pool.acquire() as conn:
+                await conn.execute("""
                     UPDATE dh_monitors
                     SET found_today = 0, found_date = CURRENT_DATE
                     WHERE found_date < CURRENT_DATE
                 """)
-        await conn.execute("""
+                await conn.execute("""
                     DELETE FROM dh_monitor_hits
                     WHERE notified_at < NOW() - INTERVAL '7 days'
                 """)
 
-        rows = await conn.fetch("""
+                rows = await conn.fetch("""
                     SELECT m.*
                     FROM dh_monitors m
                     JOIN dh_users u ON u.user_id = m.user_id
@@ -1119,417 +788,277 @@ async def monitor_scanner_loop():
                       AND u.sub_until > NOW()
                 """)
 
-      if not rows:
-        await asyncio.sleep(60)
-        continue
+            if not rows:
+                await asyncio.sleep(60)
+                continue
 
-      grouped: Dict[Tuple[str, str, str], List[asyncpg.Record]] = {}
-      for m in rows:
-        key = (
-            m["title"].strip().lower(),
-            m["city"].strip(),
-            m["source"].strip(),
-        )
-        grouped.setdefault(key, []).append(m)
+            grouped: Dict[Tuple[str, str, str], List[asyncpg.Record]] = {}
+            for m in rows:
+                key = (m["title"].strip().lower(), m["city"].strip(), m["source"].strip())
+                grouped.setdefault(key, []).append(m)
 
-      for (q_low, city, source), mon_list in grouped.items():
-        _, feed = await build_honest_feed(
-            category="all",
-            source=source,
-            search_query=q_low,
-            city=city,
-        )
-        if not feed:
-          continue
+            for (q_low, city, source), mon_list in grouped.items():
+                _, feed = await build_honest_feed(
+                    category="all",
+                    source=source,
+                    search_query=q_low,
+                    city=city,
+                )
+                if not feed:
+                    continue
 
-        for m in mon_list:
-          min_margin = int(m["min_margin"])
-          eligible_lots = [
-              lot for lot in feed if float(lot.get("profitPct", 0)) >= min_margin
-          ]
-          if not eligible_lots:
-            continue
+                for m in mon_list:
+                    min_margin = int(m["min_margin"])
+                    eligible_lots = [
+                        lot for lot in feed
+                        if float(lot.get("profitPct", 0)) >= min_margin
+                    ]
+                    if not eligible_lots:
+                        continue
 
-          sent_in_cycle = 0
-          for lot in eligible_lots:
-            if sent_in_cycle >= 3:
-              break
-            lot_key = f"{lot['id']}_{lot['price']}"
+                    sent_in_cycle = 0
+                    for lot in eligible_lots:
+                        if sent_in_cycle >= 3:
+                            break
+                        lot_key = f"{lot['id']}_{lot['price']}"
 
-            async with pg_pool.acquire() as conn:
-              inserted = await conn.fetchval(
-                  """
+                        async with pg_pool.acquire() as conn:
+                            inserted = await conn.fetchval(
+                                """
                                 INSERT INTO dh_monitor_hits (monitor_id, lot_key)
                                 VALUES ($1, $2)
                                 ON CONFLICT (monitor_id, lot_key) DO NOTHING
                                 RETURNING lot_key
                                 """,
-                  m["id"],
-                  lot_key,
-              )
-            if not inserted:
-              continue
+                                m["id"], lot_key,
+                            )
+                        if not inserted:
+                            continue
 
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=f"🔥 Открыть на {lot['source']}",
-                            url=lot["url"],
+                        kb = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [InlineKeyboardButton(text=f"🔥 Открыть на {lot['source']}", url=lot["url"])],
+                                [InlineKeyboardButton(text="⚡ Открыть DealHunter", web_app=WebAppInfo(url=WEBAPP_URL))],
+                            ]
                         )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="⚡ Открыть DealHunter",
-                            web_app=WebAppInfo(url=WEBAPP_URL),
-                        )
-                    ],
-                ]
-            )
-            msg_text = (
-                f"🎯 <b>Совпадение по монитору «{m['title']}»!</b>\n\n"
-                f"📦 <b>{lot['title']}</b>\n"
-                f"📍 Регион: <b>{lot['city']}</b> ({lot['source']})\n"
-                f"💰 Цена: <b>{lot['price']:,} ₽</b> (Медиана группы:"
-                f" {lot['market']:,} ₽)\n"
-                f"📊 Отклонение от медианы: <b>−{lot['profitPct']}%"
-                f" (−{lot['profitRub']:,} ₽)</b>"
-            ).replace(",", " ")
+                        msg_text = (
+                            f"🎯 <b>Совпадение по монитору «{m['title']}»!</b>\n\n"
+                            f"📦 <b>{lot['title']}</b>\n"
+                            f"📍 Регион: <b>{lot['city']}</b> ({lot['source']})\n"
+                            f"💰 Цена: <b>{lot['price']:,} ₽</b> (Медиана рынка: {lot['market']:,} ₽)\n"
+                            f"📊 Ниже рынка на: <b>−{lot['profitPct']}% (−{lot['profitRub']:,} ₽)</b>"
+                        ).replace(",", " ")
 
-            try:
-              await bot.send_message(
-                  m["user_id"], msg_text, parse_mode="HTML", reply_markup=kb
-              )
-              sent_in_cycle += 1
-              async with pg_pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE dh_monitors SET found_today = found_today + 1,"
-                    " last_notified_lot = $2 WHERE id = $1",
-                    m["id"],
-                    lot_key,
-                )
-            except Exception as e:
-              logger.warning(f"Ошибка отправки пуша монитора {m['id']}: {e}")
+                        try:
+                            await bot.send_message(m["user_id"], msg_text, parse_mode="HTML", reply_markup=kb)
+                            sent_in_cycle += 1
+                            async with pg_pool.acquire() as conn:
+                                await conn.execute(
+                                    "UPDATE dh_monitors SET found_today = found_today + 1, last_notified_lot = $2 WHERE id = $1",
+                                    m["id"], lot_key,
+                                )
+                        except Exception as e:
+                            logger.warning(f"Ошибка пуша монитора {m['id']}: {e}")
 
-        await asyncio.sleep(1.5)
-    except asyncio.CancelledError:
-      break
-    except Exception as e:
-      logger.exception(f"Ошибка цикла сканера мониторов: {e}")
+                await asyncio.sleep(1.5)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.exception(f"Ошибка сканера: {e}")
 
-    await asyncio.sleep(60)
+        await asyncio.sleep(60)
 
 
 # =====================================================================
-# 8. TELEGRAM BOT (/start, ПЛАТЕЖИ STARS, АВТО-REFUND)
+# 8. TELEGRAM BOT
 # =====================================================================
 @dp.message(CommandStart())
-async def cmd_start(
-    message: types.Message, command: Optional[CommandObject] = None
-):
-  uid = message.from_user.id
-  fname = (message.from_user.first_name or "Охотник")[:64]
-  uname = (message.from_user.username or "")[:64]
+async def cmd_start(message: types.Message, command: Optional[CommandObject] = None):
+    uid = message.from_user.id
+    fname = (message.from_user.first_name or "Охотник")[:64]
+    uname = (message.from_user.username or "")[:64]
 
-  candidate_ref = None
-  args = command.args if command else None
-  if not args and message.text and " " in message.text:
-    args = message.text.split(" ", 1)[1].strip()
-  if args and args.startswith("ref_"):
-    r_str = args.replace("ref_", "").strip()
-    if r_str.isdigit() and int(r_str) != uid:
-      candidate_ref = int(r_str)
+    candidate_ref = None
+    args = command.args if command else None
+    if not args and message.text and " " in message.text:
+        args = message.text.split(" ", 1)[1].strip()
+    if args and args.startswith("ref_"):
+        r_str = args.replace("ref_", "").strip()
+        if r_str.isdigit() and int(r_str) != uid:
+            candidate_ref = int(r_str)
 
-  if pg_pool:
-    await upsert_user_atomic(uid, fname, uname, candidate_ref_id=candidate_ref)
+    if pg_pool:
+        await upsert_user_atomic(uid, fname, uname, candidate_ref_id=candidate_ref)
 
-  kb = InlineKeyboardMarkup(
-      inline_keyboard=[
-          [
-              InlineKeyboardButton(
-                  text="⚡ Запустить DealHunter PRO",
-                  web_app=WebAppInfo(url=WEBAPP_URL),
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  text="⭐️ Купить Stars выгодно (BunnyStars)",
-                  url=BUNNY_STARS_URL,
-              )
-          ],
-      ]
-  )
-  await message.answer(
-      f"👋 <b>Привет, {fname}!</b>\n\n"
-      "<b>DealHunter PRO</b> — радар выгодных предложений <b>Wildberries, Ozon"
-      " и Avito</b> с кластерным анализом цен.\n\n"
-      f"🎁 Новым пользователям доступно <b>{TRIAL_DAYS} дня PRO бесплатно</b>"
-      " внутри приложения!\n"
-      f"👥 Приглашайте друзей и получайте <b>+{REFERRAL_BONUS_DAYS} дня PRO</b>"
-      f" за каждого друга (до {MAX_REF_DAYS_PER_MONTH} дней в месяц).",
-      parse_mode="HTML",
-      reply_markup=kb,
-  )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚡ Запустить DealHunter PRO", web_app=WebAppInfo(url=WEBAPP_URL))],
+            [InlineKeyboardButton(text="⭐️ Купить Stars выгодно (BunnyStars)", url=BUNNY_STARS_URL)],
+        ]
+    )
+    await message.answer(
+        f"👋 <b>Привет, {fname}!</b>\n\n"
+        "<b>DealHunter PRO</b> — радар выгодных цен и мониторинга любых товаров на <b>Wildberries, Ozon и Avito</b>.\n\n"
+        f"🎁 Новым пользователям доступно <b>{TRIAL_DAYS} дня PRO бесплатно</b> при активации внутри приложения!\n"
+        f"👥 Приглашайте друзей и получайте <b>+{REFERRAL_BONUS_DAYS} дня PRO</b> за каждого друга.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
 
 
 @dp.pre_checkout_query()
 async def on_pre_checkout(query: PreCheckoutQuery):
-  payload = query.invoice_payload or ""
-  if (
-      not payload.startswith("pro_30d_")
-      or query.currency != "XTR"
-      or query.total_amount != STARS_PRICE
-  ):
-    await bot.answer_pre_checkout_query(
-        query.id,
-        ok=False,
-        error_message="Некорректные параметры счёта. Создайте новый счёт.",
-    )
-    return
-  if not pg_pool:
-    await bot.answer_pre_checkout_query(
-        query.id,
-        ok=False,
-        error_message="Сервис обновляется. Попробуйте через минуту.",
-    )
-    return
-  await bot.answer_pre_checkout_query(query.id, ok=True)
+    payload = query.invoice_payload or ""
+    if not payload.startswith("pro_30d_") or query.currency != "XTR" or query.total_amount != STARS_PRICE:
+        await bot.answer_pre_checkout_query(query.id, ok=False, error_message="Некорректный счёт")
+        return
+    await bot.answer_pre_checkout_query(query.id, ok=True)
 
 
 @dp.message(F.successful_payment)
 async def on_successful_payment(message: types.Message):
-  sp = message.successful_payment
-  uid = message.from_user.id
-  charge_id = sp.telegram_payment_charge_id
-  amount = sp.total_amount
-  payload = sp.invoice_payload
+    sp = message.successful_payment
+    uid = message.from_user.id
+    charge_id = sp.telegram_payment_charge_id
+    amount = sp.total_amount
+    payload = sp.invoice_payload
 
-  last_error = None
-  for attempt in range(3):
     try:
-      pool = require_db()
-      now = now_utc()
-      async with pool.acquire() as conn:
-        async with conn.transaction():
-          inserted = await conn.fetchval(
-              """
-                        INSERT INTO dh_payments (charge_id, user_id, amount_stars, days_granted, payload)
-                        VALUES ($1, $2, $3, 30, $4)
-                        ON CONFLICT (charge_id) DO NOTHING
-                        RETURNING charge_id
-                        """,
-              charge_id,
-              uid,
-              amount,
-              payload,
-          )
-          if inserted:
-            await upsert_user_atomic(
-                uid, message.from_user.first_name or "Охотник", ""
-            )
-            row = await conn.fetchrow(
-                "SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE",
-                uid,
-            )
-            cur_end = row["sub_until"] if row else None
-            base_time = cur_end if (cur_end and cur_end > now) else now
-            new_end = base_time + timedelta(days=30)
-            await conn.execute(
-                "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE"
-                " user_id = $1",
-                uid,
-                new_end,
-            )
-      await message.answer(
-          "✅ <b>Оплата успешно подтверждена!</b>\n\n"
-          "Вам начислено <b>+30 дней подписки DealHunter PRO</b>.\n"
-          f"Чек транзакции: <code>{charge_id}</code>",
-          parse_mode="HTML",
-      )
-      return
+        pool = require_db()
+        now = now_utc()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO dh_payments (charge_id, user_id, amount_stars, days_granted, payload)
+                    VALUES ($1, $2, $3, 30, $4)
+                    ON CONFLICT (charge_id) DO NOTHING
+                    RETURNING charge_id
+                    """,
+                    charge_id, uid, amount, payload,
+                )
+                if inserted:
+                    await upsert_user_atomic(uid, message.from_user.first_name or "Охотник", "")
+                    row = await conn.fetchrow("SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+                    cur_end = row["sub_until"] if row else None
+                    base_time = cur_end if (cur_end and cur_end > now) else now
+                    new_end = base_time + timedelta(days=30)
+                    await conn.execute("UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1", uid, new_end)
+        await message.answer(f"✅ <b>Оплата подтверждена!</b>\n\n+30 дней PRO начислено.\nЧек: <code>{charge_id}</code>", parse_mode="HTML")
     except Exception as e:
-      last_error = e
-      logger.error(f"Попытка {attempt + 1}/3 зачисления {charge_id}: {e}")
-      await asyncio.sleep(1.5)
-
-  logger.critical(
-      f"СБОЙ ОПЛАТЫ {charge_id} для {uid}: {last_error}. Возврат Stars."
-  )
-  try:
-    await bot.refund_star_payment(
-        user_id=uid, telegram_payment_charge_id=charge_id
-    )
-    await message.answer(
-        "⚠️ <b>Технический сбой при зачислении подписки.</b>\n\n"
-        "Ваши Telegram Stars были <b>автоматически возвращены</b> на ваш"
-        " баланс.\n"
-        f"ID возврата: <code>{charge_id}</code>",
-        parse_mode="HTML",
-    )
-  except Exception as ref_err:
-    logger.critical(f"Не удалось выполнить авто-возврат {charge_id}: {ref_err}")
-
-
-@dp.message(Command("refund"))
-async def cmd_admin_refund(
-    message: types.Message, command: Optional[CommandObject] = None
-):
-  if not ADMIN_UID or message.from_user.id != ADMIN_UID:
-    return
-  args = (command.args or "").split() if command else []
-  if len(args) != 2 or not args[0].isdigit():
-    await message.answer(
-        "Использование: <code>/refund USER_ID CHARGE_ID</code>",
-        parse_mode="HTML",
-    )
-    return
-  target_uid = int(args[0])
-  charge_id = args[1].strip()
-  try:
-    await bot.refund_star_payment(
-        user_id=target_uid, telegram_payment_charge_id=charge_id
-    )
-    if pg_pool:
-      async with pg_pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE dh_payments SET refunded = TRUE WHERE charge_id = $1",
-            charge_id,
-        )
-    await message.answer(
-        f"✅ Возврат по чеку <code>{charge_id}</code> выполнен.",
-        parse_mode="HTML",
-    )
-  except Exception as e:
-    await message.answer(f"Ошибка возврата: {e}")
+        logger.error(f"Ошибка оплаты: {e}")
 
 
 async def single_leader_background_manager():
-  global BOT_USERNAME_CACHE, background_leader_conn
-  await asyncio.sleep(2)
-  while True:
-    try:
-      if not pg_pool:
-        await asyncio.sleep(5)
-        continue
-      if background_leader_conn is None or background_leader_conn.is_closed():
-        background_leader_conn = await pg_pool.acquire()
-
-      locked = await background_leader_conn.fetchval(
-          "SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_ID
-      )
-      if locked:
-        logger.info("Лидер получен: запуск бота и сканера.")
-        scanner_task = asyncio.create_task(monitor_scanner_loop())
+    global BOT_USERNAME_CACHE, background_leader_conn
+    await asyncio.sleep(2)
+    while True:
         try:
-          if bot:
-            me = await bot.get_me()
-            if me and me.username:
-              BOT_USERNAME_CACHE = me.username
-            await bot.delete_webhook(drop_pending_updates=False)
-            await dp.start_polling(
-                bot, handle_signals=False, close_bot_session=False
-            )
-          else:
-            await scanner_task
-        finally:
-          scanner_task.cancel()
-      else:
-        await asyncio.sleep(15)
-    except asyncio.CancelledError:
-      break
-    except Exception as e:
-      logger.warning(f"Перезапуск координатора через 5 сек: {e}")
-      await asyncio.sleep(5)
+            if not pg_pool:
+                await asyncio.sleep(5)
+                continue
+            if background_leader_conn is None or background_leader_conn.is_closed():
+                background_leader_conn = await pg_pool.acquire()
+
+            locked = await background_leader_conn.fetchval("SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_ID)
+            if locked:
+                logger.info("Лидер получен: запуск бота и сканера.")
+                scanner_task = asyncio.create_task(monitor_scanner_loop())
+                try:
+                    if bot:
+                        me = await bot.get_me()
+                        if me and me.username:
+                            BOT_USERNAME_CACHE = me.username
+                        await bot.delete_webhook(drop_pending_updates=False)
+                        await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+                    else:
+                        await scanner_task
+                finally:
+                    scanner_task.cancel()
+            else:
+                await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Рестарт фонового воркера: {e}")
+            await asyncio.sleep(5)
 
 
 @app.on_event("startup")
 async def on_startup():
-  global leader_task
-  await init_db()
-  leader_task = asyncio.create_task(single_leader_background_manager())
+    global leader_task
+    await init_db()
+    leader_task = asyncio.create_task(single_leader_background_manager())
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-  global leader_task, background_leader_conn, pg_pool
-  if leader_task:
-    leader_task.cancel()
-  if bot:
-    try:
-      await bot.session.close()
-    except Exception:
-      pass
-  if background_leader_conn and pg_pool:
-    try:
-      await pg_pool.release(background_leader_conn)
-    except Exception:
-      pass
-  if pg_pool:
-    try:
-      await pg_pool.close()
-    except Exception:
-      pass
+    global leader_task, background_leader_conn, pg_pool
+    if leader_task:
+        leader_task.cancel()
+    if bot:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+    if background_leader_conn and pg_pool:
+        try:
+            await pg_pool.release(background_leader_conn)
+        except Exception:
+            pass
+    if pg_pool:
+        try:
+            await pg_pool.close()
+        except Exception:
+            pass
 
 
 # =====================================================================
-# 9. ЗАЩИЩЕННЫЕ REST API ЭНДПОИНТЫ
+# 9. REST API ЭНДПОИНТЫ
 # =====================================================================
 @app.get("/health")
 @app.head("/")
 async def health():
-  return {
-      "status": "ok",
-      "bot": BOT_USERNAME_CACHE,
-      "db_connected": bool(pg_pool),
-  }
+    return {"status": "ok", "bot": BOT_USERNAME_CACHE, "db_connected": bool(pg_pool)}
 
 
 @app.get("/api/state")
 async def api_state(auth: Dict[str, Any] = Depends(get_authenticated_user)):
-  pool = require_db()
-  user = await upsert_user_atomic(
-      uid=auth["uid"],
-      first_name=auth["first_name"],
-      username=auth["username"],
-      candidate_ref_id=auth["ref_id"],
-  )
-  async with pool.acquire() as conn:
-    await conn.execute(
-        "UPDATE dh_monitors SET found_today = 0, found_date = CURRENT_DATE"
-        " WHERE user_id = $1 AND found_date < CURRENT_DATE",
-        auth["uid"],
+    pool = require_db()
+    user = await upsert_user_atomic(
+        uid=auth["uid"],
+        first_name=auth["first_name"],
+        username=auth["username"],
+        candidate_ref_id=auth["ref_id"],
     )
-    rows = await conn.fetch(
-        "SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC",
-        auth["uid"],
-    )
-  monitors = [
-      {
-          "id": r["id"],
-          "title": r["title"],
-          "city": r["city"],
-          "source": r["source"],
-          "minMargin": r["min_margin"],
-          "active": bool(r["active"]),
-          "foundToday": r["found_today"],
-      }
-      for r in rows
-  ]
-  return JSONResponse({"user": user, "monitors": monitors})
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE dh_monitors SET found_today = 0, found_date = CURRENT_DATE WHERE user_id = $1 AND found_date < CURRENT_DATE", auth["uid"])
+        rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", auth["uid"])
+    monitors = [
+        {
+            "id": r["id"],
+            "title": r["title"],
+            "city": r["city"],
+            "source": r["source"],
+            "minMargin": r["min_margin"],
+            "active": bool(r["active"]),
+            "foundToday": r["found_today"],
+        }
+        for r in rows
+    ]
+    return JSONResponse({"user": user, "monitors": monitors})
 
 
 @app.post("/api/claim-trial")
-async def api_claim_trial(
-    auth: Dict[str, Any] = Depends(get_authenticated_user),
-):
-  await upsert_user_atomic(
-      uid=auth["uid"],
-      first_name=auth["first_name"],
-      username=auth["username"],
-      candidate_ref_id=auth["ref_id"],
-  )
-  user = await claim_trial_and_reward_referrer(auth["uid"])
-  return JSONResponse({"status": "ok", "user": user})
+async def api_claim_trial(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    await upsert_user_atomic(
+        uid=auth["uid"],
+        first_name=auth["first_name"],
+        username=auth["username"],
+        candidate_ref_id=auth["ref_id"],
+    )
+    user = await claim_trial_and_reward_referrer(auth["uid"])
+    return JSONResponse({"status": "ok", "user": user})
 
 
 @app.get("/api/live-feed")
@@ -1538,37 +1067,59 @@ async def api_live_feed(
     source: str = "all",
     q: str = "",
     city: str = "Москва",
+    sort: str = "profit",
     auth: Dict[str, Any] = Depends(get_authenticated_user),
 ):
-  user = await upsert_user_atomic(
-      auth["uid"], auth["first_name"], auth["username"]
-  )
-  if not user["subActive"]:
-    return JSONResponse({"locked": True, "items": [], "extConnected": False})
+    user = await upsert_user_atomic(auth["uid"], auth["first_name"], auth["username"])
+    if not user["subActive"]:
+        return JSONResponse({"locked": True, "items": [], "extConnected": False})
 
-  has_ext, items = await build_honest_feed(
-      category=category, source=source, search_query=q, city=city
-  )
-  return JSONResponse({
-      "locked": False,
-      "items": items,
-      "extConnected": has_ext,
-      "updatedAt": now_utc().strftime("%H:%M:%S"),
-  })
+    has_ext, items = await build_honest_feed(
+        category=category,
+        source=source,
+        search_query=q,
+        city=city,
+        sort_by=sort,
+        excluded_ids=user.get("claimedIds", []),
+    )
+    return JSONResponse({
+        "locked": False,
+        "items": items,
+        "extConnected": has_ext,
+        "updatedAt": now_utc().strftime("%H:%M:%S"),
+    })
+
+
+class ClaimLotReq(BaseModel):
+    lotId: str = Field(..., max_length=80)
+
+
+@app.post("/api/claim-lot")
+async def api_claim_lot(data: ClaimLotReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    """Добавляет лот в список 'забранных', чтобы он мгновенно исчез из ленты навсегда."""
+    pool = require_db()
+    uid = auth["uid"]
+    lot_id = data.lotId.strip()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT claimed_ids FROM dh_users WHERE user_id = $1", uid)
+        cur_list = []
+        if row and row["claimed_ids"]:
+            try:
+                cur_list = json.loads(row["claimed_ids"])
+            except Exception:
+                cur_list = []
+        if lot_id not in cur_list:
+            cur_list.append(lot_id)
+            cur_list = cur_list[-200:]
+            await conn.execute("UPDATE dh_users SET claimed_ids = $2 WHERE user_id = $1", uid, json.dumps(cur_list))
+    return JSONResponse({"status": "ok", "claimedId": lot_id})
 
 
 class MonitorCreateReq(BaseModel):
-  title: str = Field(..., min_length=2, max_length=80)
-  city: Literal[
-      "Москва",
-      "Санкт-Петербург",
-      "Екатеринбург",
-      "Казань",
-      "Новосибирск",
-      "Краснодар",
-  ] = "Москва"
-  source: Literal["Wildberries", "Ozon", "Avito", "all"] = "all"
-  minMargin: int = Field(default=15, ge=5, le=65)
+    title: str = Field(..., min_length=1, max_length=120)
+    city: str = Field(default="Москва", max_length=50)
+    source: str = Field(default="all", max_length=30)
+    minMargin: int = Field(default=15, ge=1, le=70)
 
 
 @app.post("/api/monitors")
@@ -1576,261 +1127,136 @@ async def api_create_monitor(
     data: MonitorCreateReq,
     auth: Dict[str, Any] = Depends(get_authenticated_user),
 ):
-  pool = require_db()
-  uid = auth["uid"]
-  user = await upsert_user_atomic(uid, auth["first_name"], auth["username"])
-  if not user["subActive"] and not user["trialClaimed"]:
-    user = await claim_trial_and_reward_referrer(uid)
-  if not user["subActive"]:
-    raise HTTPException(
-        status_code=403, detail="Требуется активная подписка PRO"
-    )
+    pool = require_db()
+    uid = auth["uid"]
+    user = await upsert_user_atomic(uid, auth["first_name"], auth["username"])
+    if not user["subActive"] and not user["trialClaimed"]:
+        user = await claim_trial_and_reward_referrer(uid)
+    if not user["subActive"]:
+        raise HTTPException(status_code=403, detail="Требуется активная подписка PRO")
 
-  mid = f"m_{uid}_{int(now_utc().timestamp() * 1000)}"
-  async with pool.acquire() as conn:
-    count = await conn.fetchval(
-        "SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid
-    )
-    if count >= 15:
-      raise HTTPException(
-          status_code=400, detail="Лимит: не более 15 мониторов"
-      )
-    await conn.execute(
-        """
+    mid = f"m_{uid}_{int(now_utc().timestamp() * 1000)}"
+    city_val = data.city if data.city in ALLOWED_CITIES else "Москва"
+    source_val = data.source if data.source in ALLOWED_SOURCES else "all"
+
+    async with pool.acquire() as conn:
+        count = await conn.fetchval("SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid)
+        if count >= 20:
+            raise HTTPException(status_code=400, detail="Лимит: не более 20 мониторов")
+        await conn.execute(
+            """
             INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today, found_date)
             VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0, CURRENT_DATE)
             """,
-        mid,
-        uid,
-        data.title.strip(),
-        data.city,
-        data.source,
-        data.minMargin,
-    )
-    rows = await conn.fetch(
-        "SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC",
-        uid,
-    )
+            mid, uid, data.title.strip(), city_val, source_val, data.minMargin,
+        )
+        rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
 
-  return JSONResponse({
-      "status": "ok",
-      "monitors": [
-          {
-              "id": r["id"],
-              "title": r["title"],
-              "city": r["city"],
-              "source": r["source"],
-              "minMargin": r["min_margin"],
-              "active": bool(r["active"]),
-              "foundToday": r["found_today"],
-          }
-          for r in rows
-      ],
-  })
+    return JSONResponse({
+        "status": "ok",
+        "monitors": [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "city": r["city"],
+                "source": r["source"],
+                "minMargin": r["min_margin"],
+                "active": bool(r["active"]),
+                "foundToday": r["found_today"],
+            }
+            for r in rows
+        ],
+    })
 
 
 @app.post("/api/monitors/{mid}/toggle")
-async def api_toggle_monitor(
-    mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)
-):
-  pool = require_db()
-  uid = auth["uid"]
-  async with pool.acquire() as conn:
-    await conn.execute(
-        "UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id"
-        " = $2",
-        mid,
-        uid,
-    )
-    rows = await conn.fetch(
-        "SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC",
-        uid,
-    )
-  return JSONResponse({
-      "status": "ok",
-      "monitors": [
-          {
-              "id": r["id"],
-              "title": r["title"],
-              "city": r["city"],
-              "source": r["source"],
-              "minMargin": r["min_margin"],
-              "active": bool(r["active"]),
-              "foundToday": r["found_today"],
-          }
-          for r in rows
-      ],
-  })
+async def api_toggle_monitor(mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    pool = require_db()
+    uid = auth["uid"]
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE dh_monitors SET active = NOT active WHERE id = $1 AND user_id = $2", mid, uid)
+        rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
+    return JSONResponse({
+        "status": "ok",
+        "monitors": [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "city": r["city"],
+                "source": r["source"],
+                "minMargin": r["min_margin"],
+                "active": bool(r["active"]),
+                "foundToday": r["found_today"],
+            }
+            for r in rows
+        ],
+    })
 
 
 @app.delete("/api/monitors/{mid}")
-async def api_delete_monitor(
-    mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)
-):
-  pool = require_db()
-  uid = auth["uid"]
-  async with pool.acquire() as conn:
-    await conn.execute(
-        "DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2", mid, uid
-    )
-    await conn.execute(
-        "DELETE FROM dh_monitor_hits WHERE monitor_id = $1", mid
-    )
-    rows = await conn.fetch(
-        "SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC",
-        uid,
-    )
-  return JSONResponse({
-      "status": "ok",
-      "monitors": [
-          {
-              "id": r["id"],
-              "title": r["title"],
-              "city": r["city"],
-              "source": r["source"],
-              "minMargin": r["min_margin"],
-              "active": bool(r["active"]),
-              "foundToday": r["found_today"],
-          }
-          for r in rows
-      ],
-  })
+async def api_delete_monitor(mid: str, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    pool = require_db()
+    uid = auth["uid"]
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM dh_monitors WHERE id = $1 AND user_id = $2", mid, uid)
+        await conn.execute("DELETE FROM dh_monitor_hits WHERE monitor_id = $1", mid)
+        rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
+    return JSONResponse({
+        "status": "ok",
+        "monitors": [
+            {
+                "id": r["id"],
+                "title": r["title"],
+                "city": r["city"],
+                "source": r["source"],
+                "minMargin": r["min_margin"],
+                "active": bool(r["active"]),
+                "foundToday": r["found_today"],
+            }
+            for r in rows
+        ],
+    })
 
 
 class SavedUpdateReq(BaseModel):
-  savedIds: List[str]
+    savedIds: List[str]
 
 
 @app.post("/api/saved")
-async def api_save_lots(
-    data: SavedUpdateReq, auth: Dict[str, Any] = Depends(get_authenticated_user)
-):
-  pool = require_db()
-  clean_ids = [
-      re.sub(r"[^a-zA-Z0-9_\-]", "", str(x))[:40] for x in data.savedIds[:100]
-  ]
-  async with pool.acquire() as conn:
-    await conn.execute(
-        "UPDATE dh_users SET saved_ids = $2 WHERE user_id = $1",
-        auth["uid"],
-        json.dumps(clean_ids),
-    )
-  return JSONResponse({"status": "ok"})
+async def api_save_lots(data: SavedUpdateReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    pool = require_db()
+    clean_ids = [re.sub(r"[^a-zA-Z0-9_\-]", "", str(x))[:40] for x in data.savedIds[:100]]
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE dh_users SET saved_ids = $2 WHERE user_id = $1", auth["uid"], json.dumps(clean_ids))
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/api/create-invoice")
-async def api_create_stars_invoice(
-    auth: Dict[str, Any] = Depends(get_authenticated_user),
-):
-  uid = auth["uid"]
-  if not bot:
-    raise HTTPException(status_code=500, detail="Бот не подключён")
-  try:
-    invoice_link = await bot.create_invoice_link(
-        title="DealHunter PRO — 30 дней",
-        description=(
-            "Полный доступ к радару карточек, кластерному анализу цен и"
-            " авто-мониторингу."
-        ),
-        payload=f"pro_30d_{uid}_{int(now_utc().timestamp())}",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="PRO на 30 дней", amount=STARS_PRICE)],
-    )
-    return JSONResponse({"invoiceUrl": invoice_link})
-  except Exception as e:
-    logger.error(f"Ошибка создания инвойса: {e}")
-    return JSONResponse(
-        {"error": "Не удалось создать счёт Telegram Stars"}, status_code=500
-    )
-
-
-class ExternalLotItem(BaseModel):
-  id: str = Field(..., max_length=60)
-  title: str = Field(..., max_length=140)
-  source: Literal["Avito", "Ozon", "Wildberries"]
-  city: str = Field(default="Москва", max_length=50)
-  price: int = Field(..., gt=0)
-  market: int = Field(..., gt=0)
-  profitRub: int = Field(default=0)
-  profitPct: float = Field(default=0.0)
-  tags: List[str] = Field(default_factory=list)
-  sellerName: str = Field(default="Продавец", max_length=60)
-  sellerRating: float = Field(default=5.0)
-  sellerReviews: int = Field(default=0)
-  desc: str = Field(default="", max_length=600)
-  url: str = Field(..., max_length=400)
-
-
-@app.post("/api/push-lots")
-async def api_push_external_lots(
-    lots: List[ExternalLotItem],
-    x_worker_secret: Optional[str] = Header(None),
-):
-  if not WORKER_SECRET:
-    raise HTTPException(status_code=503, detail="WORKER_SECRET не настроен")
-  if not x_worker_secret or not hmac.compare_digest(
-      x_worker_secret, WORKER_SECRET
-  ):
-    raise HTTPException(status_code=401, detail="Неверный ключ авторизации")
-
-  pool = require_db()
-  inserted_count = 0
-  async with pool.acquire() as conn:
-    for item in lots[:50]:
-      try:
-        safe_url = validate_and_clean_url(item.url)
-      except ValueError as err:
-        logger.warning(f"Отклонён URL ({item.url}): {err}")
-        continue
-
-      clean_id = re.sub(r"[^a-zA-Z0-9_\-]", "", item.id)
-      if not clean_id:
-        continue
-      clean_tags = json.dumps(
-          [str(t)[:30] for t in item.tags[:4]], ensure_ascii=False
-      )
-
-      await conn.execute(
-          """
-                INSERT INTO dh_lots (
-                    id, title, source, city, price, market, profit_rub, profit_pct,
-                    tags, seller_name, seller_rating, seller_reviews, description, url, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, NOW())
-                ON CONFLICT (id) DO UPDATE SET
-                    price = EXCLUDED.price,
-                    market = EXCLUDED.market,
-                    profit_rub = EXCLUDED.profit_rub,
-                    profit_pct = EXCLUDED.profit_pct,
-                    created_at = NOW()
-                """,
-          clean_id,
-          item.title,
-          item.source,
-          item.city,
-          item.price,
-          item.market,
-          item.profitRub,
-          item.profitPct,
-          clean_tags,
-          item.sellerName,
-          item.sellerRating,
-          item.sellerReviews,
-          item.desc,
-          safe_url,
-      )
-      inserted_count += 1
-
-  return JSONResponse({"status": "ok", "saved": inserted_count})
+async def api_create_stars_invoice(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    uid = auth["uid"]
+    if not bot:
+        raise HTTPException(status_code=500, detail="Бот не подключён")
+    try:
+        invoice_link = await bot.create_invoice_link(
+            title="DealHunter PRO — 30 дней",
+            description="Полный доступ к поиску, честному расчету медианы цен и авто-мониторингу.",
+            payload=f"pro_30d_{uid}_{int(now_utc().timestamp())}",
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="PRO на 30 дней", amount=STARS_PRICE)],
+        )
+        return JSONResponse({"invoiceUrl": invoice_link})
+    except Exception as e:
+        logger.error(f"Ошибка создания инвойса: {e}")
+        return JSONResponse({"error": "Не удалось создать счёт Telegram Stars"}, status_code=500)
 
 
 # =====================================================================
-# 10. UI: ФИРМЕННЫЙ LIQUID GLASS + ZERO XSS
+# 10. UI LIQUID GLASS (СОРТИРОВКА, СКРЫТИЕ ЗАБРАННЫХ, ПРАВКА МОНИТОРА)
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
-async def serve_liquid_glass_ui():
-  return """<!DOCTYPE html>
+async def serve_ui():
+    return """<!DOCTYPE html>
 <html lang="ru" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
@@ -1879,48 +1305,31 @@ async def serve_liquid_glass_ui():
       position: fixed; width: 310px; height: 310px; border-radius: 50%;
       background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
       top: -95px; right: calc(50% - 210px); pointer-events: none; filter: blur(40px);
-      animation: floatOrb 6s ease-in-out infinite alternate;
     }
-    @keyframes floatOrb {
-      0% { transform: translate(0, 0) scale(1); }
-      100% { transform: translate(-18px, 14px) scale(1.08); }
-    }
-    .screen-content { position: relative; z-index: 1; padding: 14px 14px 26px; animation: fadeIn 0.22s ease; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-    .spin { animation: spin 0.8s linear infinite; }
-
-    .ptr-bar {
-      height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
-      gap: 8px; font-size: 12px; font-weight: 700; color: var(--accent);
-      transition: height 0.18s ease; background: var(--glass-pill);
-    }
+    .screen-content { position: relative; z-index: 1; padding: 14px 14px 26px; }
     .glass-card {
       background: var(--glass-card); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
       border: 1px solid var(--glass-border); border-radius: 24px; padding: 16px; margin-bottom: 12px;
-      transition: transform 0.15s ease;
+      transition: all 0.25s ease;
     }
-    .glass-card:active { transform: scale(0.99); }
     .top-header {
       position: sticky; top: 0; z-index: 20; background: var(--glass-dock);
       backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
       border-bottom: 1px solid var(--glass-stroke); padding: 12px 16px;
     }
-
     .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 6px; }
     .search-input {
       width: 100%; height: 40px; padding: 0 34px 0 36px; border-radius: 14px;
       background: var(--glass-pill); border: 1px solid var(--glass-border);
       color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none;
     }
-    .search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .search-input:focus { border-color: var(--accent); }
     .search-icon { position: absolute; left: 12px; top: 12px; color: var(--text-muted); pointer-events: none; }
     .search-clear {
       position: absolute; right: 88px; top: 10px; width: 20px; height: 20px;
       border-radius: 50%; border: none; background: var(--glass-stroke);
       color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer;
     }
-
     .pills-scroll { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin-top: 9px; }
     .pills-scroll::-webkit-scrollbar { display: none; }
     .cat-pill {
@@ -1945,7 +1354,6 @@ async def serve_liquid_glass_ui():
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
       border: none; font-family: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
-      transition: transform 0.12s ease;
     }
     .btn:active { transform: scale(0.97); }
     .btn-icon {
@@ -2023,10 +1431,6 @@ async def serve_liquid_glass_ui():
 <body>
   <div class="phone-shell" id="shell">
     <div class="ambient-orb"></div>
-    <div id="ptr-bar" class="ptr-bar">
-      <i data-lucide="refresh-cw" style="width:15px; height:15px;"></i>
-      <span id="ptr-text">Потяните вниз для обновления...</span>
-    </div>
     <div id="toast-box"></div>
     <div id="app"></div>
   </div>
@@ -2080,8 +1484,8 @@ async def serve_liquid_glass_ui():
       source: 'all',
       city: 'Москва',
       searchQuery: '',
+      sortBy: 'profit',
       isRefreshing: false,
-      extConnected: false,
       updatedAt: '',
       detailId: null,
       showNewMonitor: false,
@@ -2095,6 +1499,7 @@ async def serve_liquid_glass_ui():
         subUntil: new Date(Date.now() + 259200 * 1000).toISOString(),
         secondsLeft: 259200,
         savedIds: [],
+        claimedIds: [],
         refCount: 0,
         refDaysEarned: 0,
         refMonthDays: 0,
@@ -2138,33 +1543,6 @@ async def serve_liquid_glass_ui():
       const profEl = document.getElementById('prof-timer');
       if (profEl) profEl.textContent = formatCountdown(diff);
     }, 1000);
-
-    let startY = 0;
-    let pull = 0;
-    window.addEventListener('touchstart', (e) => {
-      startY = (window.scrollY <= 5 && state.tab === 'feed' && !state.detailId) ? e.touches[0].clientY : 0;
-    }, { passive: true });
-
-    window.addEventListener('touchmove', (e) => {
-      if (!startY) return;
-      pull = Math.max(0, e.touches[0].clientY - startY);
-      if (pull > 12 && window.scrollY <= 5) {
-        const bar = document.getElementById('ptr-bar');
-        const txt = document.getElementById('ptr-text');
-        if (bar) bar.style.height = Math.min(52, pull * 0.45) + 'px';
-        if (txt) txt.textContent = pull > 95 ? 'Отпустите для обновления...' : 'Потяните вниз для обновления...';
-      }
-    }, { passive: true });
-
-    window.addEventListener('touchend', async () => {
-      const bar = document.getElementById('ptr-bar');
-      if (pull > 95 && state.tab === 'feed') {
-        if (bar) bar.style.height = '44px';
-        await loadFeed(true);
-      }
-      if (bar) bar.style.height = '0px';
-      startY = 0; pull = 0;
-    });
 
     function toggleTheme() {
       state.theme = state.theme === 'dark' ? 'light' : 'dark';
@@ -2221,15 +1599,15 @@ async def serve_liquid_glass_ui():
           category: state.category,
           source: state.source,
           city: state.city,
-          q: state.searchQuery
+          q: state.searchQuery,
+          sort: state.sortBy
         });
         const res = await fetch(`/api/live-feed?${params.toString()}`, { headers: authHeaders() });
         if (res.ok) {
           const data = await res.json();
           state.listings = data.items || [];
-          state.extConnected = Boolean(data.extConnected);
           state.updatedAt = data.updatedAt || '';
-          if (notify) showToast(`⚡ Обновлено (${state.listings.length} лотов)`);
+          if (notify) showToast(`⚡ Найдено: ${state.listings.length} лотов`);
         }
       } catch (e) {}
       state.isRefreshing = false;
@@ -2242,7 +1620,7 @@ async def serve_liquid_glass_ui():
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           state.user = data.user;
-          showToast('🎉 PRO-доступ на 3 дня активирован!');
+          showToast('🎉 PRO-доступ активирован!');
           await loadFeed(false);
         } else {
           showToast(data.detail || 'Ошибка активации');
@@ -2271,7 +1649,7 @@ async def serve_liquid_glass_ui():
           showToast(data.error || 'Ошибка создания счёта');
         }
       } catch (e) {
-        showToast('Ошибка соединения с сервером');
+        showToast('Ошибка сети');
       }
     }
 
@@ -2288,27 +1666,60 @@ async def serve_liquid_glass_ui():
       });
     }
 
-    async function createMonitorAction() {
-      const title = document.getElementById('m-title').value.trim();
-      const city = document.getElementById('m-city').value;
-      const source = document.getElementById('m-source').value;
-      const minMargin = parseInt(document.getElementById('m-margin').value) || 15;
-      if (title.length < 2) { showToast('Введите название товара'); return; }
-
-      const res = await fetch('/api/monitors', {
+    // Мгновенное удаление лота из ленты при нажатии "Забрать лот"
+    async function claimLotAction(lotId, targetUrl) {
+      const el = document.getElementById(`lot-card-${lotId}`);
+      if (el) {
+        el.style.opacity = '0';
+        el.style.transform = 'scale(0.95)';
+        setTimeout(() => {
+          state.listings = state.listings.filter(x => x.id !== lotId);
+          render();
+        }, 220);
+      }
+      openSafeUrl(targetUrl);
+      await fetch('/api/claim-lot', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ title, city, source, minMargin })
+        body: JSON.stringify({ lotId: String(lotId) })
       });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        state.showNewMonitor = false;
-        showToast('⚡ Авто-монитор запущен!');
-        render();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        showToast(err.detail || 'Ошибка создания монитора');
+    }
+
+    async function createMonitorAction() {
+      const titleEl = document.getElementById('m-title');
+      const cityEl = document.getElementById('m-city');
+      const srcEl = document.getElementById('m-source');
+      const marginEl = document.getElementById('m-margin');
+
+      const title = titleEl ? titleEl.value.trim() : '';
+      const city = cityEl ? cityEl.value : 'Москва';
+      const source = srcEl ? srcEl.value : 'all';
+      const minMargin = marginEl ? (parseInt(marginEl.value) || 15) : 15;
+
+      if (!title || title.length < 2) {
+        showToast('Введите название товара для отслеживания');
+        return;
+      }
+
+      showToast('Сохранение монитора...');
+      try {
+        const res = await fetch('/api/monitors', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ title, city, source, minMargin })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          state.monitors = data.monitors;
+          state.showNewMonitor = false;
+          showToast('⚡ Авто-монитор успешно запущен!');
+          render();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          showToast(err.detail || 'Ошибка создания');
+        }
+      } catch (e) {
+        showToast('Ошибка соединения');
       }
     }
 
@@ -2331,6 +1742,7 @@ async def serve_liquid_glass_ui():
       }
     }
 
+    // Делегирование кликов (Zero XSS)
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
@@ -2346,6 +1758,7 @@ async def serve_liquid_glass_ui():
       }
       else if (action === 'source') { state.source = val; loadFeed(false); }
       else if (action === 'category') { state.category = val; state.searchQuery = ''; loadFeed(false); }
+      else if (action === 'sort') { state.sortBy = val; loadFeed(false); }
       else if (action === 'search-run') {
         const inp = document.getElementById('q-input');
         if (inp) {
@@ -2358,10 +1771,10 @@ async def serve_liquid_glass_ui():
       else if (action === 'open-detail') { state.detailId = val; window.scrollTo(0, 0); render(); }
       else if (action === 'close-detail') { state.detailId = null; render(); }
       else if (action === 'save-lot') { e.stopPropagation(); toggleSaveLot(val); }
-      else if (action === 'open-lot-url') {
+      else if (action === 'claim-and-open') {
         e.stopPropagation();
         const item = state.listings.find(x => x.id === val);
-        if (item && item.url) openSafeUrl(item.url);
+        if (item && item.url) claimLotAction(val, item.url);
       }
       else if (action === 'open-url') { openSafeUrl(val); }
       else if (action === 'claim-trial') { claimTrialAction(); }
@@ -2370,7 +1783,11 @@ async def serve_liquid_glass_ui():
         state.showNewMonitor = true;
         render();
       }
-      else if (action === 'create-monitor') { createMonitorAction(); }
+      else if (action === 'create-monitor-btn') {
+        e.preventDefault();
+        e.stopPropagation();
+        createMonitorAction();
+      }
       else if (action === 'toggle-monitor') { toggleMonitorAction(val); }
       else if (action === 'delete-monitor') { deleteMonitorAction(val); }
       else if (action === 'copy-ref') {
@@ -2380,7 +1797,7 @@ async def serve_liquid_glass_ui():
         }
       }
       else if (action === 'share-ref') {
-        const u = 'https://t.me/share/url?url=' + encodeURIComponent(state.user.refLink) + '&text=' + encodeURIComponent('🔥 Лови радар выгодных товаров DealHunter! По моей ссылке тебе дадут 3 дня PRO бесплатно:');
+        const u = 'https://t.me/share/url?url=' + encodeURIComponent(state.user.refLink) + '&text=' + encodeURIComponent('🔥 Лови радар честных скидок DealHunter! По моей ссылке 3 дня PRO бесплатно:');
         openSafeUrl(u);
       }
       else if (action === 'legal') { state.legalDoc = val; render(); }
@@ -2394,33 +1811,11 @@ async def serve_liquid_glass_ui():
       }
     });
 
-    function renderLockedState() {
-      return `
-        <div class="glass-card" style="text-align:center; padding: 28px 18px; border-color: rgba(255,90,31,0.35);">
-          <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-            <i data-lucide="lock" style="width:28px; height:28px;"></i>
-          </div>
-          <h2 style="font-size:19px; font-weight:800; margin-bottom:8px;">Доступ к лотам закрыт</h2>
-          <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-            Для просмотра живой ленты товаров <b>Wildberries, Ozon и Avito</b>, поиска и работы авто-мониторов необходима подписка <b>DealHunter PRO</b>.
-          </p>
-          <button class="btn btn-large btn-accent" style="margin-bottom:10px;" data-action="buy-pro">
-            <i data-lucide="zap" style="width:18px; height:18px;"></i>
-            <span>Активировать PRO · 350 Stars</span>
-          </button>
-          <button class="btn btn-large btn-stars-bot" data-action="open-url" data-val="${BUNNY_STARS_LINK}">
-            <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
-            <span>Купить Telegram Stars со скидкой</span>
-          </button>
-        </div>
-      `;
-    }
-
     function renderLotCard(item) {
       const isSaved = state.user.savedIds.includes(item.id);
       const hasDiff = Number(item.profitPct) > 0;
       return `
-        <div class="glass-card" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;">
+        <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;">
           <div class="row-between" style="margin-bottom: 8px;">
             <div style="display:flex; align-items:center; gap: 7px;">
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
@@ -2434,11 +1829,11 @@ async def serve_liquid_glass_ui():
           <div class="row-between" style="padding: 10px 12px; border-radius: 14px; background: var(--glass-pill); margin-bottom: 12px;">
             <div>
               <div class="t-num" style="font-size: 20px; font-weight: 800;">${fmt(item.price)} ₽</div>
-              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Медиана модели: ${fmt(item.market)} ₽</div>
+              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Медиана выдачи: ${fmt(item.market)} ₽</div>
             </div>
             ${hasDiff
               ? `<div class="profit-pill t-num">−${esc(item.profitPct)}\% ·${fmt(item.profitRub)} ₽</div>`
-              : `<div class="spec-tag t-num">По медиане</div>`
+              : `<div class="spec-tag t-num">В рынке</div>`
             }
           </div>
           <div class="row-between">
@@ -2447,7 +1842,7 @@ async def serve_liquid_glass_ui():
               <button class="btn btn-icon" style="width:34px; height:34px;" data-action="save-lot" data-val="${esc(item.id)}">
                 <i data-lucide="heart" style="width:15px; height:15px; ${isSaved ? 'fill:var(--accent); stroke:var(--accent);' : ''}"></i>
               </button>
-              <button class="btn btn-pill btn-accent" style="height:34px; padding:0 13px;" data-action="open-lot-url" data-val="${esc(item.id)}">
+              <button class="btn btn-pill btn-accent" style="height:34px; padding:0 13px;" data-action="claim-and-open" data-val="${esc(item.id)}">
                 <span>Забрать лот</span>
               </button>
             </div>
@@ -2466,9 +1861,9 @@ async def serve_liquid_glass_ui():
               <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="shield-alert" style="width:28px; height:28px;"></i>
               </div>
-              <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Откройте внутри Telegram</h2>
+              <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Запустите внутри Telegram</h2>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">${esc(state.authError)}</p>
-              <button class="btn btn-large btn-accent" data-action="open-url" data-val="https://t.me/DealHunterAvito_bot">Запустить @DealHunterAvito_bot</button>
+              <button class="btn btn-large btn-accent" data-action="open-url" data-val="https://t.me/DealHunterAvito_bot">Открыть @DealHunterAvito_bot</button>
             </div>
           </div>
         `;
@@ -2496,7 +1891,7 @@ async def serve_liquid_glass_ui():
                 <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
                   <div>
                     <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Медиана модели: ${fmt(item.market)} ₽</div>
+                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Медиана выборки: ${fmt(item.market)} ₽</div>
                   </div>
                   ${Number(item.profitPct) > 0 ? `<div class="profit-pill t-num">−${esc(item.profitPct)}%</div>` : ''}
                 </div>
@@ -2504,9 +1899,9 @@ async def serve_liquid_glass_ui():
                   <b>Продавец:</b> ${esc(item.seller.name)} · ★ ${esc(item.seller.rating)} (${esc(item.seller.reviews)} отзывов)
                 </div>
                 <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
-                <button class="btn btn-large btn-accent" data-action="open-lot-url" data-val="${esc(item.id)}">
+                <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
                   <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>Открыть карточку на ${esc(item.source)}</span>
+                  <span>Забрать лот на ${esc(item.source)}</span>
                 </button>
               </div>
             </div>
@@ -2534,55 +1929,60 @@ async def serve_liquid_glass_ui():
                 </div>
                 <div>
                   <div style="font-size:16px; font-weight:800; line-height:1.1;">DealHunter</div>
-                  <div style="font-size:10px; color:var(--text-muted);">Свайп вниз — обновить${state.updatedAt ? ' · ' + esc(state.updatedAt) : ''}</div>
+                  <div style="font-size:10px; color:var(--text-muted);">${state.updatedAt ? 'Обновлено ' + esc(state.updatedAt) : 'Радар цен'}</div>
                 </div>
               </div>
               <div style="display:flex; align-items:center; gap:6px;">
                 ${timerBadgeHtml}
-                <button class="btn btn-icon" data-action="refresh">
-                  <i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i>
-                </button>
-                <button class="btn btn-icon" data-action="theme">
-                  <i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i>
-                </button>
+                <button class="btn btn-icon" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
+                <button class="btn btn-icon" data-action="theme"><i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i></button>
               </div>
             </div>
 
-            <!-- ПОИСКОВАЯ СТРОКА ВСЕГДА НА ГЛАВНОМ ЭКРАНЕ -->
+            <!-- ПОИСКОВАЯ СТРОКА (ЛЮБЫЕ ТОВАРЫ) -->
             <div class="search-wrap">
               <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
               <input
                 type="text"
                 id="q-input"
                 class="search-input"
-                placeholder="Поиск (Xiaomi, iPhone 16, игрушка, RTX 4070)..."
+                placeholder="Что ищем (Xiaomi, конструктор, куртка, RTX)..."
                 value="${esc(state.searchQuery)}"
               />
               ${state.searchQuery ? `<button class="search-clear" data-action="search-reset"><i data-lucide="x" style="width:12px; height:12px;"></i></button>` : ''}
               <button class="btn btn-pill btn-accent" style="height:40px; padding:0 15px;" data-action="search-run">Найти</button>
             </div>
 
+            <!-- ПЛОЩАДКИ И СОРТИРОВКА БЕЗ ЗАХЛАМЛЕНИЯ -->
             <div class="pills-scroll">
               <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" data-action="source" data-val="all">Все площадки</button>
               <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries</button>
               <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
               <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
             </div>
-            <div class="pills-scroll" style="margin-top:6px;">
-              <button class="cat-pill ${state.category === 'all' && !state.searchQuery ? 'active' : ''}" data-action="category" data-val="all">Все товары</button>
-              <button class="cat-pill ${state.category === 'xiaomi' ? 'active' : ''}" data-action="category" data-val="xiaomi">Xiaomi</button>
-              <button class="cat-pill ${state.category === 'iphone' ? 'active' : ''}" data-action="category" data-val="iphone">iPhone</button>
-              <button class="cat-pill ${state.category === 'macbook' ? 'active' : ''}" data-action="category" data-val="macbook">MacBook</button>
-              <button class="cat-pill ${state.category === 'gpu' ? 'active' : ''}" data-action="category" data-val="gpu">Видеокарты</button>
-              <button class="cat-pill ${state.category === 'ps5' ? 'active' : ''}" data-action="category" data-val="ps5">Консоли</button>
+
+            <!-- БЛОК СОРТИРОВКИ И КАТЕГОРИЙ -->
+            <div class="row-between" style="margin-top:8px;">
+              <div class="pills-scroll" style="margin-top:0; flex:1;">
+                <button class="cat-pill ${state.category === 'all' && !state.searchQuery ? 'active' : ''}" data-action="category" data-val="all">Все</button>
+                <button class="cat-pill ${state.category === 'electronics' ? 'active' : ''}" data-action="category" data-val="electronics">Электроника</button>
+                <button class="cat-pill ${state.category === 'auto' ? 'active' : ''}" data-action="category" data-val="auto">Авто</button>
+                <button class="cat-pill ${state.category === 'home' ? 'active' : ''}" data-action="category" data-val="home">Дом</button>
+                <button class="cat-pill ${state.category === 'clothing' ? 'active' : ''}" data-action="category" data-val="clothing">Одежда</button>
+                <button class="cat-pill ${state.category === 'toys' ? 'active' : ''}" data-action="category" data-val="toys">Игрушки</button>
+              </div>
+              <div style="display:flex; gap:4px; margin-left:6px;">
+                <button class="btn btn-pill btn-glass" style="height:32px; padding:0 10px; font-size:11px;" data-action="sort" data-val="${state.sortBy === 'profit' ? 'price_asc' : (state.sortBy === 'price_asc' ? 'date' : 'profit')}">
+                  <i data-lucide="arrow-down-up" style="width:13px; height:13px;"></i>
+                  <span>${state.sortBy === 'profit' ? 'По выгоде' : (state.sortBy === 'price_asc' ? 'Дешевле' : 'По дате')}</span>
+                </button>
+              </div>
             </div>
           </div>
           <div class="screen-content">
-            ${!state.user.subActive
-              ? renderLockedState()
-              : (state.listings.length
-                  ? state.listings.map(renderLotCard).join('')
-                  : '<div class="glass-card" style="text-align:center; padding:26px;">Загружаем свежие предложения...</div>')
+            ${state.listings.length
+              ? state.listings.map(renderLotCard).join('')
+              : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу актуальных предложений не найдено. Попробуйте изменить фильтр или город.</div>'
             }
           </div>
         `;
@@ -2602,7 +2002,7 @@ async def serve_liquid_glass_ui():
                 <div class="row-between" style="margin-bottom:8px;">
                   <div>
                     <div style="font-size:15px; font-weight:800;">${esc(m.title)}</div>
-                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'WB + Ozon + Avito' : m.source)} · ${esc(m.city)} · от −${esc(m.minMargin)}%</div>
+                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · от −${esc(m.minMargin)}%</div>
                   </div>
                   <div class="ios-switch ${m.active ? 'on' : ''}" data-action="toggle-monitor" data-val="${esc(m.id)}">
                     <div class="ios-switch-knob"></div>
@@ -2615,7 +2015,7 @@ async def serve_liquid_glass_ui():
                   </button>
                 </div>
               </div>
-            `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать» в правом верхнем углу, чтобы бот присылал выгодные лоты в Telegram!</div>'}
+            `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать», чтобы бот круглосуточно искал товары по вашим параметрам!</div>'}
           </div>
         `;
       }
@@ -2731,7 +2131,7 @@ async def serve_liquid_glass_ui():
               <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
               <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Активируйте бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram. Таймер запустится сразу после нажатия!
+                Активируйте бесплатный доступ к радару находок <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram.
               </p>
               <button class="btn btn-large btn-accent" data-action="claim-trial">
                 <i data-lucide="zap" style="width:18px; height:18px;"></i>
@@ -2748,7 +2148,7 @@ async def serve_liquid_glass_ui():
                 <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что ищем (напр. Xiaomi 14, iPhone 15)" />
+              <input type="text" id="m-title" class="input-glass" placeholder="Что ищем (напр. Xiaomi 14, кроссовки Nike, LEGO)" />
               <select id="m-city" class="input-glass">
                 <option value="Москва">Москва</option>
                 <option value="Санкт-Петербург">Санкт-Петербург</option>
@@ -2763,8 +2163,11 @@ async def serve_liquid_glass_ui():
                 <option value="Ozon">Только Ozon</option>
                 <option value="Avito">Только Avito</option>
               </select>
-              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. отклонение от медианы (%)" value="15" />
-              <button class="btn btn-large btn-accent" data-action="create-monitor">Запустить мониторинг</button>
+              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от медианы (%)" value="15" />
+              <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
+                <i data-lucide="check" style="width:18px; height:18px;"></i>
+                <span>Запустить мониторинг</span>
+              </button>
             </div>
           </div>
         `;
@@ -2778,7 +2181,7 @@ async def serve_liquid_glass_ui():
               </div>
               <div class="t-num" style="font-size:26px; font-weight:800; margin-bottom:6px;">350 Stars <span style="font-size:13px; color:var(--text-muted);">/ 30 дней</span></div>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.45; margin-bottom:16px;">
-                Полный доступ к карточкам товаров Wildberries, Ozon и Avito, живому поиску и мгновенным пуш-уведомлениям в Telegram.
+                Полный доступ к карточкам товаров любых категорий, расчету медианных цен и мгновенным пуш-уведомлениям в Telegram.
               </p>
               <button class="btn btn-large btn-accent" style="margin-bottom:10px;" data-action="buy-pro">
                 <i data-lucide="star" style="width:18px; height:18px;"></i>
@@ -2795,11 +2198,11 @@ async def serve_liquid_glass_ui():
         const docs = {
           privacy: {
             t: 'Политика конфиденциальности',
-            b: '1. Сервис DealHunter обрабатывает технический идентификатор аккаунта Telegram (Telegram ID), имя пользователя и настройки фильтров исключительно для работы мини-приложения и доставки уведомлений.\\n\\n2. Сервис не запрашивает и не хранит паспортные данные, реквизиты банковских карт или номера телефонов.\\n\\n3. Пользователь вправе прекратить обработку данных в любой момент, удалив свои мониторы и остановив бота.'
+            b: '1. Сервис DealHunter обрабатывает исключительно публичный идентификатор Telegram ID, имя профиля и параметры фильтров для доставки уведомлений.\\n\\n2. Сервис не собирает паспортные данные, номера телефонов и банковские реквизиты.\\n\\n3. Пользователь вправе удалить свои данные, остановив бота.'
           },
           terms: {
             t: 'Пользовательское соглашение',
-            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых цен.\\n\\n2. Показатель «Отклонение от медианы» рассчитывается автоматически относительно выборки однотипных товаров и носит ознакомительный характер.\\n\\n3. Доступ к функционалу PRO предоставляется на 30 календарных дней за Telegram Stars.'
+            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых розничных цен.\\n\\n2. Расчёт медианной цены производится математически по выборке выдачи маркетплейсов.\\n\\n3. Оплата тарифа PRO производится за Telegram Stars на 30 дней.'
           }
         };
         const d = docs[state.legalDoc];
