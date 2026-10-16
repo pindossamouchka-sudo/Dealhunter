@@ -1,6 +1,8 @@
 import os
 import re
 import hmac
+from pathlib import Path
+import html as html_lib
 import json
 import time
 import base64
@@ -29,6 +31,8 @@ from aiogram.types import (
     PreCheckoutQuery,
 )
 
+from cities import CITIES
+
 # =====================================================================
 # 1. КОНФИГУРАЦИЯ
 # =====================================================================
@@ -41,7 +45,7 @@ logger = logging.getLogger("dealhunter")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://dealhunter-i8w2.onrender.com").strip().rstrip("/")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-WORKER_SECRET = os.getenv("WORKER_SECRET", "dh_secret_worker_key_2026").strip()
+WORKER_SECRET = os.getenv("WORKER_SECRET", "").strip()
 WB_PROXY_URL = os.getenv("WB_PROXY_URL", "").strip() or None
 SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL", "").strip()
 ADMIN_UID = int(os.getenv("ADMIN_UID", "0")) if os.getenv("ADMIN_UID", "").isdigit() else 0
@@ -67,7 +71,7 @@ CITY_DEST_MAP: Dict[str, int] = {
     "Новосибирск": -364763,
     "Краснодар": -1075831,
 }
-ALLOWED_CITIES = set(CITY_DEST_MAP.keys())
+ALLOWED_CITIES = set(CITIES)
 ALLOWED_SOURCES = {"all", "Wildberries", "Ozon", "Avito"}
 ALLOWED_HOSTS = {
     "www.wildberries.ru", "wildberries.ru",
@@ -179,8 +183,11 @@ def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
     if not user_raw:
         raise HTTPException(status_code=401, detail="Данные пользователя отсутствуют в подписи")
 
-    user_obj = json.loads(user_raw)
-    uid = int(user_obj["id"])
+    try:
+        user_obj = json.loads(user_raw)
+        uid = int(user_obj["id"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Некорректные данные пользователя")
     start_param = data_dict.get("start_param", "")
     ref_id = None
     if start_param.startswith("ref_"):
@@ -202,7 +209,7 @@ async def get_authenticated_user(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Запустите приложение внутри Telegram")
     try:
         decoded_bytes = base64.b64decode(b64_header)
-        init_data_raw = unquote(decoded_bytes.decode("utf-8"))
+        init_data_raw = decoded_bytes.decode("utf-8")
     except Exception:
         raise HTTPException(status_code=401, detail="Ошибка чтения заголовка авторизации")
 
@@ -405,6 +412,7 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
         "refMonthDays": ref_month_days,
         "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
         "botUsername": BOT_USERNAME_CACHE,
+        "sponsorChannel": SPONSOR_CHANNEL,
         "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{row['user_id']}",
     }
 
@@ -496,7 +504,7 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
 
 
 # =====================================================================
-# 5. ПОИСКОВЫЙ ДВИЖОК: ЖИВОЙ WB + РАСШИРЕННАЯ ПРОВЕРЕННАЯ БАЗА
+# 5. ПОИСКОВЫЙ ДВИЖОК: ЖИВОЙ WB + ПРОВЕРЕННАЯ БАЗА
 # =====================================================================
 DEFAULT_BRAND_QUERIES = {
     "all": "Dyson фен стайлер",
@@ -507,7 +515,7 @@ DEFAULT_BRAND_QUERIES = {
     "lego": "LEGO Technic",
 }
 
-# Полноценная проверенная база с прямыми ссылками на карточки (без перенаправления на поиск)
+# Проверенная витрина живых товаров с реальными прямыми ссылками на случай блокировок WB
 EXPANDED_VERIFIED_CATALOG: List[Dict[str, Any]] = [
     {
         "id": "wb_189351478",
@@ -612,23 +620,6 @@ EXPANDED_VERIFIED_CATALOG: List[Dict[str, Any]] = [
         "createdAtTs": int(time.time()),
     },
     {
-        "id": "wb_160392815",
-        "title": "Видеорегистратор 70mai Dash Cam Pro Plus+ A500S 2K",
-        "category": "all",
-        "source": "Wildberries",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 5490,
-        "market": 6900,
-        "profitRub": 1410,
-        "profitPct": 20.4,
-        "tags": ["2K Видео", "GPS встроен", "★ 4.9"],
-        "seller": {"name": "70mai Official", "rating": 4.9, "reviews": 2450},
-        "desc": "Автомобильный видеорегистратор с матрицей Sony, ночным режимом и Wi-Fi подключением.",
-        "url": "https://www.wildberries.ru/catalog/160392815/detail.aspx",
-        "createdAtTs": int(time.time()),
-    },
-    {
         "id": "wb_190284719",
         "title": "Конструктор LEGO Technic Скоростной гоночный болид 1:10",
         "category": "lego",
@@ -641,7 +632,7 @@ EXPANDED_VERIFIED_CATALOG: List[Dict[str, Any]] = [
         "profitPct": 29.1,
         "tags": ["1280 деталей", "LEGO Technic", "★ 4.9"],
         "seller": {"name": "ToyStore", "rating": 4.9, "reviews": 850},
-        "desc": "Большой конструктор спорткара с рабочим рулевым управлением и подвижным поршневым двигателем V8.",
+        "desc": "Большой конструктор спорткара с рабочим рулевым управлением и подвижным двигателем V8.",
         "url": "https://www.wildberries.ru/catalog/190284719/detail.aspx",
         "createdAtTs": int(time.time()),
     },
@@ -660,40 +651,6 @@ EXPANDED_VERIFIED_CATALOG: List[Dict[str, Any]] = [
         "seller": {"name": "Ozon Express", "rating": 4.9, "reviews": 418},
         "desc": "Ультрабук Apple на процессоре M3 с 16 ГБ оперативной памяти для профессиональных задач.",
         "url": "https://www.ozon.ru/product/noutbuk-apple-macbook-air-13-m3-16-512-gb-1429803951/",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "oz_1398451204",
-        "title": "Видеокарта Palit GeForce RTX 4070 Super Dual 12 ГБ GDDR6X",
-        "category": "electronics",
-        "source": "Ozon",
-        "city": "Москва",
-        "timeAgo": "В наличии · Live",
-        "price": 54900,
-        "market": 64900,
-        "profitRub": 10000,
-        "profitPct": 15.4,
-        "tags": ["12 ГБ GDDR6X", "DLSS 3.5", "★ 4.9"],
-        "seller": {"name": "Ситилинк", "rating": 4.9, "reviews": 530},
-        "desc": "Видеокарта GeForce RTX 4070 Super 12GB в заводской упаковке с официальной гарантией.",
-        "url": "https://www.ozon.ru/product/videokarta-palit-geforce-rtx-4070-super-dual-12-gb-1398451204/",
-        "createdAtTs": int(time.time()),
-    },
-    {
-        "id": "av_4189205412",
-        "title": "iPhone 15 Pro Max 256 ГБ Natural Titanium (АКБ 98%)",
-        "category": "electronics",
-        "source": "Avito",
-        "city": "Москва",
-        "timeAgo": "Проверено Avito",
-        "price": 79000,
-        "market": 94000,
-        "profitRub": 15000,
-        "profitPct": 16.0,
-        "tags": ["АКБ 98%", "Без ремонтов", "Полный комплект"],
-        "seller": {"name": "Алексей", "rating": 5.0, "reviews": 64},
-        "desc": "Оригинальный телефон в идеальном состоянии, полный комплект с коробкой и чеком.",
-        "url": "https://www.avito.ru/moskva/telefony/iphone_15_pro_max_256gb_natural_titanium_4189205412",
         "createdAtTs": int(time.time()),
     },
 ]
@@ -768,10 +725,12 @@ async def fetch_wb_realtime_api(query_text: str, city: str = "Москва") -> 
 
         candidates.append((price_rub, full_title, brand, p))
 
+    # Снижен барьер: не отсекает выдачу при малом количестве товаров
     if len(candidates) < 2:
         return []
 
     all_prices = sorted(c[0] for c in candidates)
+    # 65-й перцентиль цен как адекватная рыночная розничная планка
     idx_market = int(len(all_prices) * 0.65)
     market_benchmark = all_prices[min(idx_market, len(all_prices) - 1)]
     sample_size = len(candidates)
@@ -842,7 +801,7 @@ async def fetch_db_external_lots(
     for r in rows:
         if source != "all" and r["source"].lower() != source.lower():
             continue
-        if city and city not in r["city"] and r["city"] != "Вся РФ":
+        if city and city not in r["city"] and r["city"] != "Вся РФ" and r["city"] != "Вся Россия":
             continue
         if q_words:
             text_blob = (r["title"] + " " + r["description"]).lower()
@@ -903,8 +862,8 @@ async def build_honest_feed(
         wb_items = await fetch_wb_realtime_api(query_text=target_query, city=city_clean)
         combined.extend(wb_items)
 
-    # Всегда гарантируем наличие полноценного пула товаров (10+ позиций)
-    if len(combined) < 6:
+    # Если WB не ответил (или вернул мало лотов), отдаём проверенный пул реальных карточек
+    if len(combined) < 2:
         fallback = list(EXPANDED_VERIFIED_CATALOG)
         if source_clean != "all":
             fallback = [x for x in fallback if x["source"].lower() == source_clean.lower()]
@@ -937,6 +896,10 @@ async def build_honest_feed(
 # =====================================================================
 # 6. СКАНЕР МОНИТОРОВ
 # =====================================================================
+def rub(n) -> str:
+    return f"{int(n):,}".replace(",", " ")
+
+
 async def monitor_scanner_loop():
     await asyncio.sleep(12)
     while True:
@@ -1019,13 +982,13 @@ async def monitor_scanner_loop():
                             ]
                         )
                         msg_text = (
-                            f"🎯 <b>Найдена выгодная цена по монитору «{m['title']}»!</b>\n\n"
-                            f"📦 <b>{lot['title']}</b>\n"
-                            f"📍 Регион: <b>{lot['city']}</b> ({lot['source']})\n"
-                            f"💰 Цена: <b>{lot['price']:,} ₽</b>\n"
-                            f"📊 Рыночная планка: <b>{lot['market']:,} ₽</b>\n"
-                            f"🔥 Выгода: <b>−{lot['profitPct']}% (Экономия {lot['profitRub']:,} ₽)</b>"
-                        ).replace(",", " ")
+                            f"🎯 <b>Найдена выгодная цена по монитору «{html_lib.escape(m['title'])}»!</b>\n\n"
+                            f"📦 <b>{html_lib.escape(lot['title'])}</b>\n"
+                            f"📍 Регион: <b>{html_lib.escape(lot['city'])}</b> ({html_lib.escape(lot['source'])})\n"
+                            f"💰 Цена: <b>{rub(lot['price'])} ₽</b>\n"
+                            f"📊 Рыночная планка: <b>{rub(lot['market'])} ₽</b>\n"
+                            f"🔥 Выгода: <b>−{lot['profitPct']}% (экономия {rub(lot['profitRub'])} ₽)</b>"
+                        )
 
                         try:
                             await bot.send_message(m["user_id"], msg_text, parse_mode="HTML", reply_markup=kb)
@@ -1098,33 +1061,37 @@ async def on_successful_payment(message: types.Message):
     sp = message.successful_payment
     uid = message.from_user.id
     charge_id = sp.telegram_payment_charge_id
-    amount = sp.total_amount
-    payload = sp.invoice_payload
-
     try:
+        await upsert_user_atomic(uid, message.from_user.first_name or "Охотник", message.from_user.username or "")
         pool = require_db()
         now = now_utc()
         async with pool.acquire() as conn:
             async with conn.transaction():
                 inserted = await conn.fetchval(
-                    """
-                    INSERT INTO dh_payments (charge_id, user_id, amount_stars, days_granted, payload)
-                    VALUES ($1, $2, $3, 30, $4)
-                    ON CONFLICT (charge_id) DO NOTHING
-                    RETURNING charge_id
-                    """,
-                    charge_id, uid, amount, payload,
+                    "INSERT INTO dh_payments (charge_id, user_id, amount_stars, days_granted, payload) "
+                    "VALUES ($1, $2, $3, 30, $4) ON CONFLICT (charge_id) DO NOTHING RETURNING charge_id",
+                    charge_id, uid, sp.total_amount, sp.invoice_payload,
                 )
                 if inserted:
-                    await upsert_user_atomic(uid, message.from_user.first_name or "Охотник", "")
                     row = await conn.fetchrow("SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
                     cur_end = row["sub_until"] if row else None
-                    base_time = cur_end if (cur_end and cur_end > now) else now
-                    new_end = base_time + timedelta(days=30)
-                    await conn.execute("UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1", uid, new_end)
-        await message.answer(f"✅ <b>Оплата подтверждена!</b>\n\n+30 дней PRO начислено.\nЧек: <code>{charge_id}</code>", parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Ошибка оплаты: {e}")
+                    base = cur_end if (cur_end and cur_end > now) else now
+                    await conn.execute(
+                        "UPDATE dh_users SET trial_claimed = TRUE, sub_until = $2 WHERE user_id = $1",
+                        uid, base + timedelta(days=30),
+                    )
+        await message.answer(f"✅ <b>Оплата подтверждена!</b>\n\n+30 дней PRO начислено.\nЧек: <code>{html_lib.escape(charge_id)}</code>", parse_mode="HTML")
+    except Exception:
+        logger.exception(f"ОПЛАТА НЕ ЗАЧИСЛЕНА: uid={uid} charge={charge_id}")
+        if ADMIN_UID and bot:
+            try:
+                await bot.send_message(ADMIN_UID, f"⚠️ Оплата не зачислена: uid={uid}, charge={charge_id}")
+            except Exception:
+                pass
+        try:
+            await message.answer("Оплата получена, но начисление задержалось. Мы разберёмся и начислим вручную.")
+        except Exception:
+            pass
 
 
 async def single_leader_background_manager():
@@ -1148,7 +1115,32 @@ async def single_leader_background_manager():
                         if me and me.username:
                             BOT_USERNAME_CACHE = me.username
                         await bot.delete_webhook(drop_pending_updates=False)
-                        await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+                        polling = asyncio.create_task(dp.start_polling(bot, handle_signals=False, close_bot_session=False))
+                        conn_ref = background_leader_conn
+
+                        async def heartbeat():
+                            while True:
+                                await asyncio.sleep(20)
+                                try:
+                                    await asyncio.wait_for(conn_ref.fetchval("SELECT 1"), 10)
+                                except Exception as hb_err:
+                                    logger.error(f"Соединение лидера с БД потеряно: {hb_err}")
+                                    polling.cancel()
+                                    return
+
+                        hb = asyncio.create_task(heartbeat())
+                        try:
+                            await asyncio.wait({polling})
+                        finally:
+                            hb.cancel()
+                            polling.cancel()
+                        if polling.cancelled():
+                            try:
+                                conn_ref.terminate()
+                                await pg_pool.release(conn_ref)
+                            except Exception:
+                                pass
+                            background_leader_conn = None
                     else:
                         await scanner_task
                 finally:
@@ -1227,8 +1219,22 @@ async def api_state(auth: Dict[str, Any] = Depends(get_authenticated_user)):
     return JSONResponse({"user": user, "monitors": monitors})
 
 
+async def ensure_sponsor_subscription(uid: int):
+    if not SPONSOR_CHANNEL or not bot:
+        return
+    ok = False
+    try:
+        m = await bot.get_chat_member(SPONSOR_CHANNEL, uid)
+        ok = m.status in ("creator", "administrator", "member") or (m.status == "restricted" and bool(getattr(m, "is_member", False)))
+    except Exception as e:
+        logger.warning(f"Проверка подписки не удалась (бот должен быть админом канала): {e}")
+    if not ok:
+        raise HTTPException(status_code=403, detail=f"Подпишитесь на {SPONSOR_CHANNEL} и нажмите ещё раз")
+
+
 @app.post("/api/claim-trial")
 async def api_claim_trial(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    await ensure_sponsor_subscription(auth["uid"])
     await upsert_user_atomic(
         uid=auth["uid"],
         first_name=auth["first_name"],
@@ -1249,9 +1255,6 @@ async def api_live_feed(
     auth: Dict[str, Any] = Depends(get_authenticated_user),
 ):
     user = await upsert_user_atomic(auth["uid"], auth["first_name"], auth["username"])
-    if not user["subActive"] and not user["trialClaimed"]:
-        user = await claim_trial_and_reward_referrer(auth["uid"])
-
     if not user["subActive"]:
         return JSONResponse({"locked": True, "items": [], "extConnected": False})
 
@@ -1310,8 +1313,8 @@ async def api_create_monitor(
     pool = require_db()
     uid = auth["uid"]
     user = await upsert_user_atomic(uid, auth["first_name"], auth["username"])
-    if not user["subActive"] and not user["trialClaimed"]:
-        user = await claim_trial_and_reward_referrer(uid)
+    if not user["subActive"]:
+        raise HTTPException(status_code=403, detail="Мониторы доступны с активной подпиской PRO")
 
     mid = f"m_{uid}_{int(now_utc().timestamp() * 1000)}"
     city_val = data.city if data.city in ALLOWED_CITIES else "Москва"
@@ -1429,993 +1432,64 @@ async def api_create_stars_invoice(auth: Dict[str, Any] = Depends(get_authentica
         return JSONResponse({"error": "Не удалось создать счёт Telegram Stars"}, status_code=500)
 
 
+class IngestLot(BaseModel):
+    id: str = Field(..., max_length=80)
+    title: str = Field(..., max_length=200)
+    source: str
+    city: str = Field(default="Москва", max_length=50)
+    price: int = Field(..., gt=0, lt=100_000_000)
+    market: int = Field(..., gt=0, lt=100_000_000)
+    tags: List[str] = Field(default_factory=list, max_length=8)
+    sellerName: str = Field(default="Продавец", max_length=60)
+    sellerRating: float = Field(default=0, ge=0, le=5)
+    sellerReviews: int = Field(default=0, ge=0)
+    description: str = Field(default="", max_length=1000)
+    url: str
+
+
+@app.post("/api/worker/ingest")
+async def api_worker_ingest(lots: List[IngestLot], x_worker_secret: str = Header(default="")):
+    if not WORKER_SECRET or not hmac.compare_digest(x_worker_secret.encode(), WORKER_SECRET.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if len(lots) > 200:
+        raise HTTPException(status_code=400, detail="Максимум 200 лотов за запрос")
+    pool = require_db()
+    saved = skipped = 0
+    async with pool.acquire() as conn:
+        for lot in lots:
+            try:
+                url = validate_and_clean_url(lot.url)
+            except ValueError:
+                skipped += 1
+                continue
+            profit = lot.market - lot.price
+            if lot.source not in ("Avito", "Ozon", "Wildberries") or profit <= 0:
+                skipped += 1
+                continue
+            await conn.execute(
+                """
+                INSERT INTO dh_lots (id, title, source, city, price, market, profit_rub, profit_pct, tags,
+                                     seller_name, seller_rating, seller_reviews, description, url)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14)
+                ON CONFLICT (id) DO UPDATE SET price=EXCLUDED.price, market=EXCLUDED.market,
+                    profit_rub=EXCLUDED.profit_rub, profit_pct=EXCLUDED.profit_pct, tags=EXCLUDED.tags,
+                    description=EXCLUDED.description, url=EXCLUDED.url
+                """,
+                lot.id, lot.title, lot.source, lot.city, lot.price, lot.market, profit,
+                round(profit / lot.market * 100, 1), json.dumps(lot.tags, ensure_ascii=False),
+                lot.sellerName, lot.sellerRating, lot.sellerReviews, lot.description, url,
+            )
+            saved += 1
+    return {"status": "ok", "saved": saved, "skipped": skipped}
+
+
 # =====================================================================
-# 9. UI LIQUID GLASS
+# 9. UI СТАТИКА
 # =====================================================================
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
-    return """<!DOCTYPE html>
-<html lang="ru" data-theme="dark">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>DealHunter PRO</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <style>
-    :root {
-      --bg-canvas: #E4E6EC; --bg-app: #F2F3F7;
-      --glass-card: rgba(255, 255, 255, 0.86);
-      --glass-pill: rgba(15, 17, 26, 0.06);
-      --glass-dock: rgba(255, 255, 255, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.9);
-      --glass-stroke: rgba(15, 17, 26, 0.08);
-      --text-primary: #111216; --text-secondary: #5E626E; --text-muted: #969AA7;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.28); --accent-soft: rgba(255, 90, 31, 0.13);
-      --green: #18B259; --green-soft: rgba(24, 178, 89, 0.15);
-    }
-    [data-theme="dark"] {
-      --bg-canvas: #040406; --bg-app: #0A0B0E;
-      --glass-card: rgba(22, 24, 30, 0.78);
-      --glass-pill: rgba(255, 255, 255, 0.07);
-      --glass-dock: rgba(18, 20, 26, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.09);
-      --glass-stroke: rgba(255, 255, 255, 0.07);
-      --text-primary: #F5F6FA; --text-secondary: #9499A6; --text-muted: #5B606E;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.38); --accent-soft: rgba(255, 90, 31, 0.17);
-      --green: #2AD16C; --green-soft: rgba(42, 209, 108, 0.16);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
-    body {
-      background: var(--bg-canvas); color: var(--text-primary);
-      font-family: 'Inter', -apple-system, sans-serif;
-      display: flex; justify-content: center; min-height: 100vh; overscroll-behavior-y: contain;
-    }
-    .t-num { font-family: 'Manrope', 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
-    .phone-shell {
-      width: 100%; max-width: 430px; min-height: 100vh; background: var(--bg-app);
-      position: relative; overflow-x: hidden; padding-bottom: 112px;
-    }
-    .ambient-orb {
-      position: fixed; width: 310px; height: 310px; border-radius: 50%;
-      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
-      top: -95px; right: calc(50% - 210px); pointer-events: none; filter: blur(40px);
-    }
-    .screen-content { position: relative; z-index: 1; padding: 14px 14px 26px; }
-    .glass-card {
-      background: var(--glass-card); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-      border: 1px solid var(--glass-border); border-radius: 24px; padding: 16px; margin-bottom: 12px;
-      transition: all 0.25s ease;
-    }
-    .top-header {
-      position: sticky; top: 0; z-index: 20; background: var(--glass-dock);
-      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-      border-bottom: 1px solid var(--glass-stroke); padding: 12px 16px;
-    }
-    .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 6px; }
-    .search-input {
-      width: 100%; height: 40px; padding: 0 34px 0 36px; border-radius: 14px;
-      background: var(--glass-pill); border: 1px solid var(--glass-border);
-      color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none;
-    }
-    .search-input:focus { border-color: var(--accent); }
-    .search-icon { position: absolute; left: 12px; top: 12px; color: var(--text-muted); pointer-events: none; }
-    .search-clear {
-      position: absolute; right: 88px; top: 10px; width: 20px; height: 20px;
-      border-radius: 50%; border: none; background: var(--glass-stroke);
-      color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer;
-    }
-    .pills-scroll { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin-top: 9px; }
-    .pills-scroll::-webkit-scrollbar { display: none; }
-    .cat-pill {
-      height: 32px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--glass-stroke);
-      background: var(--glass-pill); color: var(--text-secondary); font-size: 12px; font-weight: 600;
-      display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer;
-    }
-    .cat-pill.active {
-      background: linear-gradient(135deg, #FF5A1F, #FF7A45); color: #FFFFFF;
-      border-color: transparent; box-shadow: 0 4px 14px -3px var(--accent-glow);
-    }
-    .spec-tag {
-      display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
-      border-radius: 9px; background: var(--glass-pill); border: 1px solid var(--glass-stroke);
-      color: var(--text-secondary); font-size: 11px; font-weight: 500;
-    }
-    .profit-pill {
-      display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px;
-      border-radius: 12px; background: var(--accent-soft); color: var(--accent);
-      font-weight: 800; font-size: 12px;
-    }
-    .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      border: none; font-family: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
-    }
-    .btn:active { transform: scale(0.97); }
-    .btn-icon {
-      width: 36px; height: 36px; border-radius: 12px; background: var(--glass-pill);
-      border: 1px solid var(--glass-stroke); color: var(--text-primary);
-    }
-    .btn-pill { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 12px; }
-    .btn-large { height: 48px; width: 100%; border-radius: 16px; font-size: 14px; font-weight: 700; }
-    .btn-accent {
-      background: linear-gradient(135deg, #FF5A1F, #FF7A45); color: #FFFFFF;
-      box-shadow: 0 8px 20px -6px var(--accent-glow);
-    }
-    .btn-stars-bot {
-      background: linear-gradient(135deg, rgba(255, 193, 7, 0.16), rgba(255, 90, 31, 0.16));
-      border: 1px solid rgba(255, 193, 7, 0.45); color: #FFC107;
-    }
-    .btn-glass { background: var(--glass-pill); border: 1px solid var(--glass-border); color: var(--text-primary); }
-
-    .floating-dock-wrap {
-      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-      width: calc(100% - 28px); max-width: 398px; z-index: 35;
-    }
-    .floating-dock {
-      height: 64px; padding: 6px; border-radius: 24px; background: var(--glass-dock);
-      backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px);
-      border: 1px solid var(--glass-border); display: grid; grid-template-columns: repeat(4, 1fr);
-      gap: 4px; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.55);
-    }
-    .dock-btn {
-      border: none; background: transparent; border-radius: 18px;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer;
-    }
-    .dock-btn.active { background: var(--glass-pill); color: var(--accent); }
-
-    .ios-switch {
-      width: 48px; height: 28px; border-radius: 999px; background: var(--glass-pill);
-      border: 1px solid var(--glass-stroke); padding: 3px; cursor: pointer; position: relative; transition: background 0.2s;
-    }
-    .ios-switch.on { background: var(--accent); }
-    .ios-switch-knob { width: 20px; height: 20px; border-radius: 50%; background: #FFFFFF; transition: transform 0.2s; }
-    .ios-switch.on .ios-switch-knob { transform: translateX(20px); }
-
-    .modal-backdrop {
-      position: fixed; inset: 0; max-width: 430px; margin: 0 auto;
-      background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      z-index: 60; display: flex; align-items: flex-end;
-    }
-    .modal-center { align-items: center; padding: 18px; }
-    .modal-sheet {
-      width: 100%; background: var(--bg-app); border-top: 1px solid var(--glass-border);
-      border-radius: 28px 28px 0 0; padding: 22px 18px 28px; max-height: 85vh; overflow-y: auto;
-    }
-    .modal-card {
-      width: 100%; background: var(--bg-app); border: 1px solid var(--glass-border);
-      border-radius: 28px; padding: 24px 20px; box-shadow: 0 25px 60px rgba(0,0,0,0.65);
-    }
-    .input-glass {
-      width: 100%; height: 44px; padding: 0 14px; border-radius: 14px;
-      background: var(--glass-pill); border: 1px solid var(--glass-border);
-      color: var(--text-primary); font-family: inherit; font-size: 14px; outline: none; margin-bottom: 10px;
-    }
-    .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .toast {
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90;
-      background: var(--text-primary); color: var(--bg-app); padding: 10px 18px;
-      border-radius: 99px; font-size: 12px; font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.35); white-space: nowrap;
-    }
-    .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
-    .src-Avito { background: rgba(0, 170, 255, 0.15); color: #29B6F6; }
-    .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
-    .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
-  </style>
-</head>
-<body>
-  <div class="phone-shell" id="shell">
-    <div class="ambient-orb"></div>
-    <div id="toast-box"></div>
-    <div id="app"></div>
-  </div>
-
-  <script>
-    const tg = window.Telegram ? window.Telegram.WebApp : null;
-    if (tg) { tg.ready(); tg.expand(); }
-
-    const RAW_INIT_DATA = (tg && tg.initData) ? tg.initData : '';
-    const BUNNY_STARS_LINK = "https://t.me/BunnyStarsBot?startapp=ref_5123484212";
-
-    function esc(val) {
-      if (val === null || val === undefined) return '';
-      return String(val)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    function encodeInitDataB64(str) {
-      if (!str) return '';
-      try {
-        const utf8Bytes = new TextEncoder().encode(str);
-        let binary = '';
-        for (let i = 0; i < utf8Bytes.length; i++) {
-          binary += String.fromCharCode(utf8Bytes[i]);
-        }
-        return btoa(binary);
-      } catch (e) {
-        return '';
-      }
-    }
-
-    function authHeaders() {
-      return {
-        'Content-Type': 'application/json',
-        'X-Tg-Init-Data-B64': encodeInitDataB64(RAW_INIT_DATA)
-      };
-    }
-
-    const savedTheme = localStorage.getItem('dh_theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
-
-    const state = {
-      theme: savedTheme,
-      authError: null,
-      tab: 'feed',
-      category: 'all',
-      source: 'all',
-      city: 'Москва',
-      searchQuery: '',
-      sortBy: 'profit',
-      isRefreshing: false,
-      updatedAt: '',
-      detailId: null,
-      showNewMonitor: false,
-      showPaywall: false,
-      legalDoc: null,
-      user: {
-        user_id: 0,
-        name: 'Охотник',
-        trialClaimed: true,
-        subActive: true,
-        subUntil: new Date(Date.now() + 259200 * 1000).toISOString(),
-        secondsLeft: 259200,
-        savedIds: [],
-        claimedIds: [],
-        refCount: 0,
-        refDaysEarned: 0,
-        refMonthDays: 0,
-        refMonthLimit: 30,
-        refLink: 'https://t.me/DealHunterAvito_bot'
-      },
-      listings: [],
-      monitors: []
-    };
-
-    const fmt = (n) => new Intl.NumberFormat('ru-RU').format(Number(n) || 0);
-
-    function showToast(msg) {
-      const box = document.getElementById('toast-box');
-      const div = document.createElement('div');
-      div.className = 'toast';
-      div.textContent = String(msg);
-      box.innerHTML = '';
-      box.appendChild(div);
-      clearTimeout(window._tTimer);
-      window._tTimer = setTimeout(() => { box.innerHTML = ''; }, 2400);
-    }
-
-    function formatCountdown(sec) {
-      if (!sec || sec <= 0) return 'Истёк';
-      const d = Math.floor(sec / 86400);
-      const h = Math.floor((sec % 86400) / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const s = Math.floor(sec % 60);
-      const pad = (v) => String(v).padStart(2, '0');
-      return d > 0 ? `${d}д ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
-    }
-
-    setInterval(() => {
-      if (!state.user || !state.user.subUntil) return;
-      const diff = Math.floor((new Date(state.user.subUntil).getTime() - Date.now()) / 1000);
-      state.user.secondsLeft = Math.max(0, diff);
-      state.user.subActive = diff > 0;
-      const el = document.getElementById('hdr-timer');
-      if (el) el.textContent = state.user.subActive ? ('PRO · ' + formatCountdown(diff)) : 'PRO истёк';
-      const profEl = document.getElementById('prof-timer');
-      if (profEl) profEl.textContent = formatCountdown(diff);
-    }, 1000);
-
-    function toggleTheme() {
-      state.theme = state.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', state.theme);
-      localStorage.setItem('dh_theme', state.theme);
-      render();
-    }
-
-    function openSafeUrl(rawUrl) {
-      try {
-        const u = String(rawUrl || '').trim();
-        if (!u.startsWith('https://')) return;
-        if (tg && tg.openLink) {
-          tg.openLink(u);
-        } else {
-          window.open(u, '_blank', 'noopener,noreferrer');
-        }
-      } catch (e) {
-        window.open(rawUrl, '_blank');
-      }
-    }
-
-    async function syncState() {
-      try {
-        const res = await fetch('/api/state', { headers: authHeaders() });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          state.authError = err.detail || 'Запустите приложение через Telegram-бота';
-          render();
-          return;
-        }
-        const data = await res.json();
-        state.authError = null;
-        state.user = data.user;
-        state.monitors = data.monitors || [];
-        await loadFeed(false);
-      } catch (e) {
-        state.authError = 'Нет соединения с сервером';
-        render();
-      }
-    }
-
-    async function loadFeed(notify = false) {
-      state.isRefreshing = true;
-      render();
-      try {
-        const params = new URLSearchParams({
-          category: state.category,
-          source: state.source,
-          city: state.city,
-          q: state.searchQuery,
-          sort: state.sortBy
-        });
-        const res = await fetch(`/api/live-feed?${params.toString()}`, { headers: authHeaders() });
-        if (res.ok) {
-          const data = await res.json();
-          state.listings = data.items || [];
-          state.updatedAt = data.updatedAt || '';
-          if (notify) showToast(`⚡ Загружено: ${state.listings.length} лотов`);
-        }
-      } catch (e) {}
-      state.isRefreshing = false;
-      render();
-    }
-
-    async function claimTrialAction() {
-      try {
-        const res = await fetch('/api/claim-trial', { method: 'POST', headers: authHeaders() });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok) {
-          state.user = data.user;
-          showToast('🎉 PRO-доступ активирован!');
-          await loadFeed(false);
-        } else {
-          showToast(data.detail || 'Ошибка активации');
-        }
-      } catch (e) {
-        showToast('Ошибка сети');
-      }
-    }
-
-    async function buyProAction() {
-      showToast('Создаём счёт Telegram Stars...');
-      try {
-        const res = await fetch('/api/create-invoice', { method: 'POST', headers: authHeaders() });
-        const data = await res.json();
-        if (data.invoiceUrl && tg && tg.openInvoice) {
-          tg.openInvoice(data.invoiceUrl, async (status) => {
-            if (status === 'paid') {
-              showToast('🎉 Оплата принята! +30 дней PRO активированы');
-              state.showPaywall = false;
-              await syncState();
-            }
-          });
-        } else if (data.invoiceUrl) {
-          openSafeUrl(data.invoiceUrl);
-        } else {
-          showToast(data.error || 'Ошибка создания счёта');
-        }
-      } catch (e) {
-        showToast('Ошибка сети');
-      }
-    }
-
-    async function toggleSaveLot(lotId) {
-      const idStr = String(lotId);
-      const idx = state.user.savedIds.indexOf(idStr);
-      if (idx >= 0) state.user.savedIds.splice(idx, 1);
-      else state.user.savedIds.push(idStr);
-      render();
-      await fetch('/api/saved', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ savedIds: state.user.savedIds })
-      });
-    }
-
-    async function claimLotAction(lotId, targetUrl) {
-      openSafeUrl(targetUrl);
-      const el = document.getElementById(`lot-card-${lotId}`);
-      if (el) {
-        el.style.opacity = '0';
-        el.style.transform = 'scale(0.95)';
-        setTimeout(() => {
-          state.listings = state.listings.filter(x => x.id !== lotId);
-          render();
-        }, 220);
-      }
-      await fetch('/api/claim-lot', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ lotId: String(lotId) })
-      });
-    }
-
-    async function createMonitorAction() {
-      const titleEl = document.getElementById('m-title');
-      const cityEl = document.getElementById('m-city');
-      const srcEl = document.getElementById('m-source');
-      const marginEl = document.getElementById('m-margin');
-
-      const title = titleEl ? titleEl.value.trim() : '';
-      const city = cityEl ? cityEl.value : 'Москва';
-      const source = srcEl ? srcEl.value : 'all';
-      const minMargin = marginEl ? (parseInt(marginEl.value) || 15) : 15;
-
-      if (!title || title.length < 2) {
-        showToast('Введите название модели для поиска');
-        return;
-      }
-
-      showToast('Запуск мониторинга...');
-      try {
-        const res = await fetch('/api/monitors', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({ title, city, source, minMargin })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          state.monitors = data.monitors;
-          state.showNewMonitor = false;
-          showToast('⚡ Авто-монитор успешно запущен!');
-          render();
-        } else {
-          const err = await res.json().catch(() => ({}));
-          showToast(err.detail || 'Ошибка создания');
-        }
-      } catch (e) {
-        showToast('Ошибка соединения');
-      }
-    }
-
-    async function toggleMonitorAction(mid) {
-      const res = await fetch(`/api/monitors/${encodeURIComponent(mid)}/toggle`, { method: 'POST', headers: authHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        render();
-      }
-    }
-
-    async function deleteMonitorAction(mid) {
-      const res = await fetch(`/api/monitors/${encodeURIComponent(mid)}`, { method: 'DELETE', headers: authHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        state.monitors = data.monitors;
-        showToast('Монитор удалён');
-        render();
-      }
-    }
-
-    document.addEventListener('click', (e) => {
-      const el = e.target.closest('[data-action]');
-      if (!el) return;
-      const action = el.getAttribute('data-action');
-      const val = el.getAttribute('data-val') || '';
-
-      if (action === 'tab') { state.tab = val; state.detailId = null; render(); }
-      else if (action === 'theme') { toggleTheme(); }
-      else if (action === 'refresh') { loadFeed(true); }
-      else if (action === 'paywall') { state.showPaywall = true; render(); }
-      else if (action === 'close-modal') {
-        state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; render();
-      }
-      else if (action === 'source') { state.source = val; loadFeed(false); }
-      else if (action === 'category') { 
-        state.category = val; 
-        state.searchQuery = '';
-        loadFeed(false); 
-      }
-      else if (action === 'sort') { state.sortBy = val; loadFeed(false); }
-      else if (action === 'search-run') {
-        const inp = document.getElementById('q-input');
-        if (inp) {
-          state.searchQuery = inp.value.trim();
-          state.category = 'all';
-          loadFeed(true);
-        }
-      }
-      else if (action === 'search-reset') { state.searchQuery = ''; loadFeed(false); }
-      else if (action === 'open-detail') { state.detailId = val; window.scrollTo(0, 0); render(); }
-      else if (action === 'close-detail') { state.detailId = null; render(); }
-      else if (action === 'save-lot') { e.stopPropagation(); toggleSaveLot(val); }
-      else if (action === 'claim-and-open') {
-        e.stopPropagation();
-        const item = state.listings.find(x => x.id === val);
-        if (item && item.url) claimLotAction(val, item.url);
-      }
-      else if (action === 'open-url') { openSafeUrl(val); }
-      else if (action === 'claim-trial') { claimTrialAction(); }
-      else if (action === 'buy-pro') { buyProAction(); }
-      else if (action === 'new-monitor-modal') {
-        state.showNewMonitor = true;
-        render();
-      }
-      else if (action === 'create-monitor-btn') {
-        e.preventDefault();
-        e.stopPropagation();
-        createMonitorAction();
-      }
-      else if (action === 'toggle-monitor') { toggleMonitorAction(val); }
-      else if (action === 'delete-monitor') { deleteMonitorAction(val); }
-      else if (action === 'copy-ref') {
-        if (navigator.clipboard && state.user.refLink) {
-          navigator.clipboard.writeText(state.user.refLink);
-          showToast('🔗 Реферальная ссылка скопирована!');
-        }
-      }
-      else if (action === 'share-ref') {
-        const u = 'https://t.me/share/url?url=' + encodeURIComponent(state.user.refLink) + '&text=' + encodeURIComponent('🔥 Радар цен DealHunter! По моей ссылке 3 дня PRO бесплатно:');
-        openSafeUrl(u);
-      }
-      else if (action === 'legal') { state.legalDoc = val; render(); }
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target && e.target.id === 'q-input') {
-        state.searchQuery = e.target.value.trim();
-        state.category = 'all';
-        loadFeed(true);
-      }
-    });
-
-    function renderLotCard(item) {
-      const isSaved = state.user.savedIds.includes(item.id);
-      const hasDiff = Number(item.profitRub) > 0;
-      return `
-        <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;">
-          <div class="row-between" style="margin-bottom: 8px;">
-            <div style="display:flex; align-items:center; gap: 7px;">
-              <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
-              <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.city)} · ${esc(item.timeAgo)}</span>
-            </div>
-          </div>
-          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${esc(item.title)}</h3>
-          <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">
-            ${(item.tags || []).map(t => `<span class="spec-tag"><i data-lucide="check-circle-2" style="width:12px; height:12px; color:var(--accent);"></i>${esc(t)}</span>`).join('')}
-          </div>
-          <div class="row-between" style="padding: 10px 12px; border-radius: 14px; background: var(--glass-pill); margin-bottom: 12px;">
-            <div>
-              <div class="t-num" style="font-size: 20px; font-weight: 800;">${fmt(item.price)} ₽</div>
-              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
-            </div>
-            ${hasDiff
-              ? `<div class="profit-pill t-num">−${esc(item.profitPct)}\% · Экономия ${fmt(item.profitRub)} ₽</div>`
-              : `<div class="spec-tag t-num">В рынке</div>`
-            }
-          </div>
-          <div class="row-between">
-            <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.seller.name)} · ★ ${esc(item.seller.rating)}</span>
-            <div style="display:flex; gap:6px;">
-              <button class="btn btn-icon" style="width:34px; height:34px;" data-action="save-lot" data-val="${esc(item.id)}">
-                <i data-lucide="heart" style="width:15px; height:15px; ${isSaved ? 'fill:var(--accent); stroke:var(--accent);' : ''}"></i>
-              </button>
-              <button class="btn btn-pill btn-accent" style="height:34px; padding:0 13px;" data-action="claim-and-open" data-val="${esc(item.id)}">
-                <span>Забрать лот</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    function render() {
-      const app = document.getElementById('app');
-
-      if (state.authError) {
-        app.innerHTML = `
-          <div class="screen-content" style="padding-top:44px;">
-            <div class="glass-card" style="text-align:center; padding:28px 18px;">
-              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-                <i data-lucide="shield-alert" style="width:28px; height:28px;"></i>
-              </div>
-              <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Запустите внутри Telegram</h2>
-              <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">${esc(state.authError)}</p>
-              <button class="btn btn-large btn-accent" data-action="open-url" data-val="https://t.me/DealHunterAvito_bot">Открыть @DealHunterAvito_bot</button>
-            </div>
-          </div>
-        `;
-        if (window.lucide) lucide.createIcons();
-        return;
-      }
-
-      if (state.detailId) {
-        const item = state.listings.find(x => x.id === state.detailId);
-        if (item) {
-          app.innerHTML = `
-            <div class="top-header row-between">
-              <button class="btn btn-pill btn-glass" data-action="close-detail">
-                <i data-lucide="chevron-left" style="width:16px; height:16px;"></i><span>Назад</span>
-              </button>
-              <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
-            </div>
-            <div class="screen-content">
-              <div class="glass-card">
-                <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">${esc(item.city)} · ${esc(item.timeAgo)}</div>
-                <h1 style="font-size:18px; font-weight:800; margin-bottom:12px; line-height:1.35;">${esc(item.title)}</h1>
-                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
-                  ${(item.tags || []).map(t => `<span class="spec-tag">${esc(t)}</span>`).join('')}
-                </div>
-                <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
-                  <div>
-                    <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
-                  </div>
-                  ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
-                </div>
-                <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); margin-bottom:12px; font-size:12px;">
-                  <b>Продавец:</b> ${esc(item.seller.name)} · ★ ${esc(item.seller.rating)} (${esc(item.seller.reviews)} отзывов)
-                </div>
-                <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
-                <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
-                  <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>Забрать лот на ${esc(item.source)}</span>
-                </button>
-              </div>
-            </div>
-          `;
-          if (window.lucide) lucide.createIcons();
-          return;
-        }
-      }
-
-      const timerBadgeHtml = `
-        <div id="hdr-timer" data-action="paywall" class="t-num" style="cursor:pointer; padding:6px 11px; border-radius:11px; font-size:11px; font-weight:800; background:${state.user.subActive ? 'var(--green-soft)' : 'var(--accent-soft)'}; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
-          ${state.user.subActive ? ('PRO · ' + formatCountdown(state.user.secondsLeft)) : 'PRO истёк'}
-        </div>
-      `;
-
-      let contentHtml = '';
-
-      if (state.tab === 'feed') {
-        contentHtml = `
-          <div class="top-header">
-            <div class="row-between">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <div style="width:34px; height:34px; border-radius:11px; background:linear-gradient(135deg, #FF5A1F, #FF7A45); display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 4px 12px var(--accent-glow);">
-                  <i data-lucide="radar" style="width:18px; height:18px;"></i>
-                </div>
-                <div>
-                  <div style="font-size:16px; font-weight:800; line-height:1.1;">DealHunter</div>
-                  <div style="font-size:10px; color:var(--text-muted);">${state.updatedAt ? 'Обновлено ' + esc(state.updatedAt) : 'Радар цен'}</div>
-                </div>
-              </div>
-              <div style="display:flex; align-items:center; gap:6px;">
-                ${timerBadgeHtml}
-                <button class="btn btn-icon" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
-                <button class="btn btn-icon" data-action="theme"><i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i></button>
-              </div>
-            </div>
-
-            <div class="search-wrap">
-              <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
-              <input
-                type="text"
-                id="q-input"
-                class="search-input"
-                placeholder="Что ищем (Dyson, iPhone 16, Xiaomi, LEGO)..."
-                value="${esc(state.searchQuery)}"
-              />
-              ${state.searchQuery ? `<button class="search-clear" data-action="search-reset"><i data-lucide="x" style="width:12px; height:12px;"></i></button>` : ''}
-              <button class="btn btn-pill btn-accent" style="height:40px; padding:0 15px;" data-action="search-run">Найти</button>
-            </div>
-
-            <div class="pills-scroll">
-              <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" data-action="source" data-val="all">Все площадки</button>
-              <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries Live</button>
-              <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
-              <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
-            </div>
-
-            <div class="pills-scroll" style="margin-top:6px;">
-              <button class="cat-pill ${state.category === 'all' && !state.searchQuery ? 'active' : ''}" data-action="category" data-val="all">Все находки</button>
-              <button class="cat-pill ${state.category === 'electronics' ? 'active' : ''}" data-action="category" data-val="electronics">iPhone</button>
-              <button class="cat-pill ${state.category === 'xiaomi' ? 'active' : ''}" data-action="category" data-val="xiaomi">Xiaomi</button>
-              <button class="cat-pill ${state.category === 'sony' ? 'active' : ''}" data-action="category" data-val="sony">PlayStation</button>
-              <button class="cat-pill ${state.category === 'laptops' ? 'active' : ''}" data-action="category" data-val="laptops">MacBook</button>
-              <button class="cat-pill ${state.category === 'lego' ? 'active' : ''}" data-action="category" data-val="lego">LEGO</button>
-            </div>
-
-            <div class="row-between" style="margin-top:10px; padding: 4px 2px;">
-              <span style="font-size:12px; color:var(--text-secondary); font-weight:600;">Найдено: ${state.listings.length} предложений</span>
-              <button class="btn btn-pill btn-glass" style="height:30px; padding:0 12px; font-size:11px;" data-action="sort" data-val="${state.sortBy === 'profit' ? 'price_asc' : (state.sortBy === 'price_asc' ? 'date' : 'profit')}">
-                <i data-lucide="arrow-down-up" style="width:12px; height:12px; color:var(--accent);"></i>
-                <span>${state.sortBy === 'profit' ? 'По экономии' : (state.sortBy === 'price_asc' ? 'Сначала дешевле' : 'По новизне')}</span>
-              </button>
-            </div>
-          </div>
-          <div class="screen-content">
-            ${state.listings.length
-              ? state.listings.map(renderLotCard).join('')
-              : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу предложений не найдено. Попробуйте изменить название бренда или город.</div>'
-            }
-          </div>
-        `;
-      }
-
-      if (state.tab === 'monitors') {
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Авто-мониторы</div>
-            <button class="btn btn-pill btn-accent" data-action="new-monitor-modal">
-              <i data-lucide="plus" style="width:14px; height:14px;"></i><span>Создать</span>
-            </button>
-          </div>
-          <div class="screen-content">
-            ${state.monitors.length ? state.monitors.map(m => `
-              <div class="glass-card">
-                <div class="row-between" style="margin-bottom:8px;">
-                  <div>
-                    <div style="font-size:15px; font-weight:800;">${esc(m.title)}</div>
-                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · скидка от рынка ≥ ${esc(m.minMargin)}%</div>
-                  </div>
-                  <div class="ios-switch ${m.active ? 'on' : ''}" data-action="toggle-monitor" data-val="${esc(m.id)}">
-                    <div class="ios-switch-knob"></div>
-                  </div>
-                </div>
-                <div class="row-between" style="padding-top:8px; border-top:1px solid var(--glass-stroke);">
-                  <span style="font-size:12px; color:var(--green); font-weight:600;">⚡ Найдено за сегодня: ${esc(m.foundToday)}</span>
-                  <button class="btn btn-icon" style="width:30px; height:30px;" data-action="delete-monitor" data-val="${esc(m.id)}">
-                    <i data-lucide="trash-2" style="width:14px; height:14px; color:var(--text-secondary);"></i>
-                  </button>
-                </div>
-              </div>
-            `).join('') : '<div class="glass-card" style="text-align:center; padding:26px;">У вас пока нет активных мониторов. Нажмите «Создать», чтобы бот присылал найденные выгодные лоты прямо в личку Telegram!</div>'}
-          </div>
-        `;
-      }
-
-      if (state.tab === 'saved') {
-        const savedList = state.listings.filter(x => state.user.savedIds.includes(x.id));
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Избранное (${state.user.savedIds.length})</div>
-            ${timerBadgeHtml}
-          </div>
-          <div class="screen-content">
-            ${savedList.length ? savedList.map(renderLotCard).join('') : '<div class="glass-card" style="text-align:center; padding:28px;">Сохранённых лотов пока нет</div>'}
-          </div>
-        `;
-      }
-
-      if (state.tab === 'profile') {
-        contentHtml = `
-          <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Профиль и бонусы</div>
-            ${timerBadgeHtml}
-          </div>
-          <div class="screen-content">
-            <div class="glass-card">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div>
-                  <div style="font-size:17px; font-weight:800;">${esc(state.user.name)}</div>
-                  <div style="font-size:12px; color:var(--text-secondary);">Telegram ID: ${esc(state.user.user_id)}</div>
-                </div>
-                <span class="profit-pill">${state.user.subActive ? 'PRO АКТИВЕН' : 'FREE'}</span>
-              </div>
-
-              <div style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
-                <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Остаток времени PRO-доступа:</div>
-                <div id="prof-timer" class="t-num" style="font-size:22px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
-                  ${formatCountdown(state.user.secondsLeft)}
-                </div>
-              </div>
-
-              <button class="btn btn-large btn-accent" style="margin-bottom:10px;" data-action="buy-pro">
-                <i data-lucide="star" style="width:18px; height:18px;"></i>
-                <span>Продлить PRO (+30 дней) · 350 Stars</span>
-              </button>
-
-              <button class="btn btn-large btn-stars-bot" data-action="open-url" data-val="${BUNNY_STARS_LINK}">
-                <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
-                <span>Пополнить Stars выгодно (BunnyStars)</span>
-              </button>
-            </div>
-
-            <div class="glass-card">
-              <div class="row-between" style="margin-bottom:8px;">
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                    <i data-lucide="users" style="width:17px; height:17px;"></i>
-                  </div>
-                  <div>
-                    <div style="font-size:15px; font-weight:800;">Реферальная программа</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">+3 дня PRO за друга (${esc(state.user.refMonthDays)}/${esc(state.user.refMonthLimit)} дн. в мес.)</div>
-                  </div>
-                </div>
-              </div>
-
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin: 12px 0;">
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800;">${esc(state.user.refCount)}</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Приглашено друзей</div>
-                </div>
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800; color:var(--green);">+${esc(state.user.refDaysEarned)} дн.</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Бонусных дней PRO</div>
-                </div>
-              </div>
-
-              <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); font-size:11px; color:var(--text-secondary); word-break:break-all; margin-bottom:10px;">
-                ${esc(state.user.refLink)}
-              </div>
-
-              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-                <button class="btn btn-pill btn-glass" style="height:40px;" data-action="copy-ref">
-                  <i data-lucide="copy" style="width:15px; height:15px;"></i><span>Скопировать</span>
-                </button>
-                <button class="btn btn-pill btn-accent" style="height:40px;" data-action="share-ref">
-                  <i data-lucide="share-2" style="width:15px; height:15px;"></i><span>Пригласить</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="glass-card">
-              <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация</div>
-              <div style="display:flex; flex-direction:column; gap:8px;">
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="privacy">
-                  <span>Политика конфиденциальности</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
-                </button>
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="terms">
-                  <span>Пользовательское соглашение</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-
-      let modalHtml = '';
-      if (!state.user.trialClaimed) {
-        modalHtml = `
-          <div class="modal-backdrop modal-center">
-            <div class="modal-card" style="text-align:center;">
-              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
-                <i data-lucide="gift" style="width:32px; height:32px;"></i>
-              </div>
-              <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
-              <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
-              <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Активируйте бесплатный доступ к мониторингу цен <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram.
-              </p>
-              <button class="btn btn-large btn-accent" data-action="claim-trial">
-                <i data-lucide="zap" style="width:18px; height:18px;"></i>
-                <span>Забрать 3 дня PRO бесплатно</span>
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (state.showNewMonitor) {
-        modalHtml = `
-          <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (Dyson, iPhone 16, Xiaomi)..." />
-              <select id="m-city" class="input-glass">
-                <option value="Москва">Москва</option>
-                <option value="Санкт-Петербург">Санкт-Петербург</option>
-                <option value="Екатеринбург">Екатеринбург</option>
-                <option value="Казань">Казань</option>
-                <option value="Новосибирск">Новосибирск</option>
-                <option value="Краснодар">Краснодар</option>
-              </select>
-              <select id="m-source" class="input-glass">
-                <option value="all">Все площадки (WB + Ozon + Avito)</option>
-                <option value="Wildberries">Только Wildberries</option>
-                <option value="Ozon">Только Ozon</option>
-                <option value="Avito">Только Avito</option>
-              </select>
-              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
-              <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
-                <i data-lucide="check" style="width:18px; height:18px;"></i>
-                <span>Запустить мониторинг</span>
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (state.showPaywall) {
-        modalHtml = `
-          <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <span class="profit-pill">DealHunter PRO</span>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <div class="t-num" style="font-size:26px; font-weight:800; margin-bottom:6px;">350 Stars <span style="font-size:13px; color:var(--text-muted);">/ 30 дней</span></div>
-              <p style="font-size:13px; color:var(--text-secondary); line-height:1.45; margin-bottom:16px;">
-                Полный доступ к поиску брендовых товаров с реальной экономией в рублях и фоновым уведомлениям в Telegram.
-              </p>
-              <button class="btn btn-large btn-accent" style="margin-bottom:10px;" data-action="buy-pro">
-                <i data-lucide="star" style="width:18px; height:18px;"></i>
-                <span>Оплатить 350 Stars</span>
-              </button>
-              <button class="btn btn-large btn-stars-bot" data-action="open-url" data-val="${BUNNY_STARS_LINK}">
-                <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                <span>Где взять Stars? Купить в BunnyStars</span>
-              </button>
-            </div>
-          </div>
-        `;
-      } else if (state.legalDoc) {
-        const docs = {
-          privacy: {
-            t: 'Политика конфиденциальности',
-            b: '1. Сервис DealHunter обрабатывает исключительно публичный идентификатор Telegram ID, имя профиля и параметры фильтров для доставки уведомлений.\\n\\n2. Сервис не собирает паспортные данные, номера телефонов и банковские реквизиты.\\n\\n3. Пользователь вправе удалить свои данные, остановив бота.'
-          },
-          terms: {
-            t: 'Пользовательское соглашение',
-            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых розничных цен.\\n\\n2. Расчёт рыночной планки производится автоматически по текущей выборке розничных предложений.\\n\\n3. Оплата тарифа PRO производится за Telegram Stars на 30 дней.'
-          }
-        };
-        const d = docs[state.legalDoc];
-        modalHtml = `
-          <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
-              <div class="row-between" style="margin-bottom:12px;">
-                <div style="font-size:15px; font-weight:800;">${esc(d.t)}</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
-              </div>
-              <div style="font-size:12px; color:var(--text-secondary); line-height:1.6; white-space:pre-line; margin-bottom:16px;">${esc(d.b)}</div>
-              <button class="btn btn-large btn-glass" data-action="close-modal">Понятно</button>
-            </div>
-          </div>
-        `;
-      }
-
-      const dockHtml = `
-        <div class="floating-dock-wrap">
-          <nav class="floating-dock">
-            <button class="dock-btn ${state.tab === 'feed' ? 'active' : ''}" data-action="tab" data-val="feed">
-              <i data-lucide="flame" style="width:19px; height:19px;"></i><span>Находки</span>
-            </button>
-            <button class="dock-btn ${state.tab === 'monitors' ? 'active' : ''}" data-action="tab" data-val="monitors">
-              <i data-lucide="radar" style="width:19px; height:19px;"></i><span>Мониторы</span>
-            </button>
-            <button class="dock-btn ${state.tab === 'saved' ? 'active' : ''}" data-action="tab" data-val="saved">
-              <i data-lucide="heart" style="width:19px; height:19px;"></i><span>Избранное</span>
-            </button>
-            <button class="dock-btn ${state.tab === 'profile' ? 'active' : ''}" data-action="tab" data-val="profile">
-              <i data-lucide="user" style="width:19px; height:19px;"></i><span>Профиль</span>
-            </button>
-          </nav>
-        </div>
-      `;
-
-      app.innerHTML = (contentHtml || '') + (modalHtml || '') + dockHtml;
-      if (window.lucide) lucide.createIcons();
-    }
-
-    syncState();
-  </script>
-</body>
-</html>
-"""
+    p = Path(__file__).parent / "static" / "index.html"
+    if p.exists():
+        page = p.read_text(encoding="utf-8")
+        return page.replace("__CITIES__", json.dumps(sorted(ALLOWED_CITIES), ensure_ascii=False))
+    return HTMLResponse("<h1>Файл static/index.html не найден. Создайте его в проекте.</h1>", status_code=500)
