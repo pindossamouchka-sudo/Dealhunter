@@ -1,0 +1,15 @@
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Артефакты парсера
+dump.html
+
+# Прочее
+*.log
+.DS_Store
