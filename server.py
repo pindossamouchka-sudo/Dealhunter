@@ -368,6 +368,8 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS signup_ip_hash TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS trial_claimed_at TIMESTAMPTZ DEFAULT NULL;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_start INT DEFAULT 23;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_end INT DEFAULT 9;")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_ip_hash ON dh_users (signup_ip_hash);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_referred_by ON dh_users (referred_by);")
         logger.info("PostgreSQL инициализирован.")
@@ -441,6 +443,8 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
         "refDaysEarned": row["ref_days_earned"] or 0,
         "refMonthDays": ref_month_days,
         "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
+        "quietStart": int(row["quiet_start"] if row["quiet_start"] is not None else QUIET_START),
+        "quietEnd": int(row["quiet_end"] if row["quiet_end"] is not None else QUIET_END),
         "botUsername": BOT_USERNAME_CACHE,
         "sponsorChannel": SPONSOR_CHANNEL,
         "refLink": f"https://t.me/{BOT_USERNAME_CACHE}?start=ref_{row['user_id']}",
@@ -818,14 +822,18 @@ def rub(n) -> str:
     return f"{int(n):,}".replace(",", " ")
 
 
+def is_quiet_for(start: int, end: int) -> bool:
+    """Тихие часы для диапазона start..end (по МСК). Диапазон может переходить через полночь."""
+    hour = (now_utc() + timedelta(hours=3)).hour
+    start, end = int(start) % 24, int(end) % 24
+    if start <= end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
 def in_quiet_hours() -> bool:
-    """Тихие часы (по МСК): ночью не будим пользователей пушами. Сканирование просто пропускается."""
-    msk_now = now_utc() + timedelta(hours=3)
-    hour = msk_now.hour
-    if QUIET_START <= QUIET_END:
-        return QUIET_START <= hour < QUIET_END
-    # диапазон через полночь, например 23 -> 9
-    return hour >= QUIET_START or hour < QUIET_END
+    """Глобальные тихие часы (по МСК): ночью не будим пользователей пушами. Сканирование просто пропускается."""
+    return is_quiet_for(QUIET_START, QUIET_END)
 
 
 async def monitor_scanner_loop():
@@ -856,7 +864,7 @@ async def monitor_scanner_loop():
                 """)
 
                 rows = await conn.fetch("""
-                    SELECT m.*
+                    SELECT m.*, u.quiet_start AS u_quiet_start, u.quiet_end AS u_quiet_end
                     FROM dh_monitors m
                     JOIN dh_users u ON u.user_id = m.user_id
                     WHERE m.active = TRUE
@@ -884,6 +892,13 @@ async def monitor_scanner_loop():
                     continue
 
                 for m in mon_list:
+                    # Персональные тихие часы пользователя: не отправляем пуши в его окно.
+                    # Хит не записывается — лот либо попадёт в следующий цикл, либо устареет.
+                    u_qs = m["u_quiet_start"] if m["u_quiet_start"] is not None else QUIET_START
+                    u_qe = m["u_quiet_end"] if m["u_quiet_end"] is not None else QUIET_END
+                    if is_quiet_for(int(u_qs), int(u_qe)):
+                        continue
+
                     min_margin = int(m["min_margin"])
                     eligible_lots = [
                         lot for lot in feed
@@ -1370,6 +1385,34 @@ async def api_delete_monitor(mid: str, auth: Dict[str, Any] = Depends(get_authen
             }
             for r in rows
         ],
+    })
+
+
+class QuietUpdateReq(BaseModel):
+    quietStart: int = Field(..., ge=0, le=23)
+    quietEnd: int = Field(..., ge=0, le=23)
+
+
+@app.post("/api/quiet")
+async def api_set_quiet(
+    data: QuietUpdateReq,
+    auth: Dict[str, Any] = Depends(get_authenticated_user),
+):
+    pool = require_db()
+    uid = auth["uid"]
+    if data.quietStart == data.quietEnd:
+        raise HTTPException(status_code=400, detail="Начало и конец тихих часов не должны совпадать")
+    await upsert_user_atomic(uid, auth["first_name"], auth["username"])
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE dh_users SET quiet_start = $2, quiet_end = $3 WHERE user_id = $1",
+            uid, data.quietStart, data.quietEnd,
+        )
+    return JSONResponse({
+        "status": "ok",
+        "quietStart": data.quietStart,
+        "quietEnd": data.quietEnd,
+        "note": "Пуши не будут приходить в это окно по Москве",
     })
 
 

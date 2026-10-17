@@ -215,6 +215,22 @@
       };
     }
 
+    function tgUser() {
+      try {
+        const u = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null;
+        return u || {};
+      } catch (e) { return {}; }
+    }
+
+    function avatarHtml(size, fontSize) {
+      const u = tgUser();
+      const initials = esc((state.user.name || 'О').trim().charAt(0).toUpperCase());
+      if (u.photo_url) {
+        return `<img src="${esc(u.photo_url)}" alt="" style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.25);" />`;
+      }
+      return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, #FF5A1F, #FF7A45); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
+    }
+
     const savedTheme = localStorage.getItem('dh_theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
 
@@ -481,6 +497,31 @@
       }
     }
 
+    async function saveQuietAction() {
+      const sEl = document.getElementById('quiet-start');
+      const eEl = document.getElementById('quiet-end');
+      const qs = sEl ? parseInt(sEl.value) : state.user.quietStart;
+      const qe = eEl ? parseInt(eEl.value) : state.user.quietEnd;
+      if (qs === qe) { showToast('Начало и конец не должны совпадать'); return; }
+      try {
+        const res = await fetch('/api/quiet', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ quietStart: qs, quietEnd: qe })
+        });
+        if (res.ok) {
+          state.user.quietStart = qs;
+          state.user.quietEnd = qe;
+          showToast(`🌙 Тихие часы сохранены: ${String(qs).padStart(2,'0')}:00–${String(qe).padStart(2,'0')}:00 МСК`);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          showToast(err.detail || 'Не удалось сохранить');
+        }
+      } catch (e) {
+        showToast('Ошибка сети');
+      }
+    }
+
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
@@ -532,6 +573,7 @@
       }
       else if (action === 'toggle-monitor') { toggleMonitorAction(val); }
       else if (action === 'delete-monitor') { deleteMonitorAction(val); }
+      else if (action === 'save-quiet') { saveQuietAction(); }
       else if (action === 'copy-ref') {
         if (navigator.clipboard && state.user.refLink) {
           navigator.clipboard.writeText(state.user.refLink);
@@ -653,8 +695,17 @@
                   </div>
                   ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
                 </div>
-                <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); margin-bottom:12px; font-size:12px;">
-                  <b>Продавец:</b> ${esc(item.seller.name)} · ★ ${esc(item.seller.rating)} (${esc(item.seller.reviews)} отзывов)
+                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:12px;">
+                  <div style="width:40px; height:40px; border-radius:12px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                    <i data-lucide="store" style="width:19px; height:19px;"></i>
+                  </div>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(item.seller.name)}</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">
+                      ★ ${esc(item.seller.rating)} · ${esc(item.seller.reviews)} отзывов ${item.seller.reviews > 100 ? '· надёжный продавец' : ''}
+                    </div>
+                  </div>
+                  <div style="font-size:11px; color:var(--text-muted); flex-shrink:0;">Продавец<br>${esc(item.source)}</div>
                 </div>
                 <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
                 <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
@@ -693,6 +744,7 @@
               <div style="display:flex; align-items:center; gap:6px;">
                 ${timerBadgeHtml}
                 <button class="btn btn-icon" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
+                ${avatarHtml(30, 13)}
                 <button class="btn btn-icon" data-action="theme"><i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i></button>
               </div>
             </div>
@@ -799,9 +851,12 @@
           <div class="screen-content">
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:12px;">
-                <div>
-                  <div style="font-size:17px; font-weight:800;">${esc(state.user.name)}</div>
-                  <div style="font-size:12px; color:var(--text-secondary);">Telegram ID: ${esc(state.user.user_id)}</div>
+                <div style="display:flex; align-items:center; gap:10px;">
+                  ${avatarHtml(46, 18)}
+                  <div>
+                    <div style="font-size:17px; font-weight:800;">${esc(state.user.name)}</div>
+                    <div style="font-size:12px; color:var(--text-secondary);">${tgUser().username ? '@' + esc(tgUser().username) : ('Telegram ID: ' + esc(state.user.user_id))}</div>
+                  </div>
                 </div>
                 <span class="profit-pill">${state.user.subActive ? 'PRO АКТИВЕН' : 'FREE'}</span>
               </div>
@@ -822,6 +877,38 @@
                 <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
                 <span>Пополнить Stars выгодно (BunnyStars)</span>
               </button>
+            </div>
+
+            <div class="glass-card">
+              <div class="row-between" style="margin-bottom:10px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="moon-star" style="width:17px; height:17px;"></i>
+                  </div>
+                  <div>
+                    <div style="font-size:15px; font-weight:800;">Тихие часы</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">Пуши не приходят в это окно (по Москве)</div>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex; gap:8px; align-items:flex-end;">
+                <div style="flex:1;">
+                  <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">С</div>
+                  <select id="quiet-start" class="input-glass" style="width:100%; height:40px;">
+                    ${Array.from(Array(24).keys()).map(h => `<option value="${h}" ${state.user.quietStart === h ? 'selected' : ''}>${String(h).padStart(2,'0')}:00</option>`).join('')}
+                  </select>
+                </div>
+                <div style="flex:1;">
+                  <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">До</div>
+                  <select id="quiet-end" class="input-glass" style="width:100%; height:40px;">
+                    ${Array.from(Array(24).keys()).map(h => `<option value="${h}" ${state.user.quietEnd === h ? 'selected' : ''}>${String(h).padStart(2,'0')}:00</option>`).join('')}
+                  </select>
+                </div>
+                <button class="btn btn-pill btn-accent" style="height:40px; padding:0 14px;" data-action="save-quiet">
+                  <i data-lucide="check" style="width:15px; height:15px;"></i>
+                </button>
+              </div>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:8px;">Окно может переходить через полночь (например, 23:00 → 09:00)</div>
             </div>
 
             <div class="glass-card">
