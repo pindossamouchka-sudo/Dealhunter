@@ -74,7 +74,7 @@ def find_items(obj):
 
 
 def parse(html):
-    """Три способа извлечения объявлений из страницы Avito. Возвращает (список, имя способа)."""
+    """Четыре способа извлечения объявлений из страницы Avito. Возвращает (список, имя способа)."""
     # Способ 1: JSON в <script data-mfe-state="true">
     for m in re.finditer(r"<script[^>]*data-mfe-state=\"true\"[^>]*>(.*?)</script>", html, re.S):
         try:
@@ -83,16 +83,67 @@ def parse(html):
             continue
         if found:
             return _from_json_items(found), "data-mfe-state"
-    # Способ 2: JSON в __initialData__
-    m = re.search(r"__initialData__\s*=\s*(\{.*?\});", html, re.S)
-    if m:
-        try:
-            found = find_items(json.loads(m.group(1)))
+    # Способ 2: JSON в __initialData__ (прямой и двойная сериализация "экранированная строка")
+    for pat in (r"__initialData__\s*=\s*(\{.*?\});", r'window\.__initialData__\s*=\s*"(.*)"\s*;?'):
+        m = re.search(pat, html, re.S)
+        if not m:
+            continue
+        raw = m.group(1)
+        for _ in range(2):  # могло прийти {"..."} или "строка-JSON" (json.loads дважды)
+            try:
+                obj = json.loads(raw)
+            except Exception:
+                break
+            if isinstance(obj, str):
+                raw = obj
+                continue
+            found = find_items(obj)
             if found:
                 return _from_json_items(found), "__initialData__"
-        except Exception:
-            pass
-    # Способ 3: HTML-карточки (data-marker="item") десктопной разметки
+            break
+        # если JSON не распознан — идём дальше
+    # Способ 3: microdata-карточки (новая разметка Avito): itemProp="url" — конец карточки,
+    # всё видимое (картинка-заголовок, цены, описание) лежит между предыдущим url и текущим.
+    urls = list(re.finditer(r'itemProp="url"\s+href="(/[^"]+)"', html))
+    if len(urls) >= 3:
+        items = []
+        prev_end = 0
+        for u in urls:
+            window = html[prev_end:u.start()]
+            path = u.group(1)
+            try:
+                alt = None
+                alts = re.findall(r'itemProp="image"[^>]*alt="([^"]{2,200})"', window) or \
+                       re.findall(r'itemProp="name"[^>]*content="([^"]{2,200})"', window)
+                if alts:
+                    alt = alts[-1]
+                else:
+                    # видимый текст: метка «Рыночная цена»/«Цена ниже рыночной» -> заголовок -> цена
+                    body = re.sub(r"<script[\s\S]*?</script>", "\n", window)
+                    lines = [s.strip() for s in re.sub(r"<[^>]+>", "\n", body).split("\n") if s.strip()]
+                    for i, s in enumerate(lines):
+                        if "рыночн" in s.lower() and "цен" in s.lower():
+                            for nxt in lines[i + 1:i + 4]:
+                                if nxt:
+                                    alt = nxt
+                                    break
+                            break
+                desc = re.findall(r'itemProp="description"[^>]*content="([^"]{2,600})"', window)
+                prices = re.findall(r"([\d\u00a0 ]{2,12})₽", window)
+                if alt:
+                    base = path.split("?", 1)[0]
+                    m_id = re.search(r"_(\d{6,})$", base) or re.search(r"(\d{8,})", base)
+                    items.append({"id": m_id.group(1) if m_id else "",
+                                  "title": str(alt).replace("&quot;", '"').strip(),
+                                  "price": _to_int_price(prices[0] if prices else 0),
+                                  "desc": (desc[-1] if desc else "")[:600],
+                                  "path": path})
+            except Exception:
+                continue
+            prev_end = u.end()
+        if items:
+            return _extract_ids(items), "itemProp-карточки"
+    # Способ 4: HTML-карточки (старая десктопная разметка)
     cards = re.findall(r'data-marker="item"([\s\S]*?)(?=data-marker="item"|$)', html)
     if cards:
         items = []
@@ -139,7 +190,8 @@ def _from_json_items(items):
 def _extract_ids(items):
     for i, it in enumerate(items):
         if not it["id"]:
-            m = re.search(r"/(\d{8,})", it["path"])
+            base = str(it["path"]).split("?", 1)[0]
+            m = re.search(r"_(\d{6,})$", base) or re.search(r"(\d{8,})", base)
             it["id"] = m.group(1) if m else f"unknown_{i}"
     return items
 
