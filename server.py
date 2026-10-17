@@ -60,9 +60,13 @@ STARS_PRICE = 350
 TRIAL_DAYS = 3
 REFERRAL_BONUS_DAYS = 3
 MAX_REF_DAYS_PER_MONTH = 30
+MAX_TRIALS_PER_IP = 3
 LOT_TTL_HOURS = 6
 ADVISORY_LOCK_ID = 94827165
 HEARTBEAT_SEC = 20
+
+QUIET_START = int(os.getenv("QUIET_START", "23")) % 24
+QUIET_END = int(os.getenv("QUIET_END", "9")) % 24
 
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
 
@@ -207,6 +211,23 @@ def verify_telegram_init_data(init_data_raw: str) -> Dict[str, Any]:
     }
 
 
+# =====================================================================
+# 3.4 АНТИФРОД: ХЭШ IP-АДРЕСА КЛИЕНТА
+# =====================================================================
+def get_client_ip_hash(request: Request) -> str:
+    """Хэш IP пользователя (за Render скрывается реальный адрес, он приходит в X-Forwarded-For).
+
+    Пустая строка = IP неизвестен (локальная разработка), проверки по нему не делаем.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    real_ip = request.headers.get("x-real-ip", "")
+    ip = (forwarded.split(",")[0].strip() if forwarded else real_ip).strip()
+    if not ip:
+        return ""
+    raw = f"{ip}::{WORKER_SECRET or BOT_TOKEN}::anti-fraud-v1"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
 async def get_authenticated_user(request: Request) -> Dict[str, Any]:
     b64_header = request.headers.get("X-Tg-Init-Data-B64", "").strip()
     if not b64_header:
@@ -219,6 +240,7 @@ async def get_authenticated_user(request: Request) -> Dict[str, Any]:
 
     auth = verify_telegram_init_data(init_data_raw)
     check_rate_limit(auth["uid"])
+    auth["ip_hash"] = get_client_ip_hash(request)
     return auth
 
 
@@ -344,6 +366,10 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0;")
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS signup_ip_hash TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS trial_claimed_at TIMESTAMPTZ DEFAULT NULL;")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_ip_hash ON dh_users (signup_ip_hash);")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_referred_by ON dh_users (referred_by);")
         logger.info("PostgreSQL инициализирован.")
     except Exception as e:
         logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
@@ -421,7 +447,15 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
     }
 
 
-async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
+async def claim_trial_and_reward_referrer(uid: int, ip_hash: str = "") -> Dict[str, Any]:
+    """
+    Выдача триала + вознаграждение реферера.
+
+    Антифрод (активен только когда известен IP молодого пользователя):
+    1. Ферма триалов: не более MAX_TRIALS_PER_IP активаций с одного IP за 30 дней.
+    2. Мультиаккаунт-рефералы: вознаграждение не выдаётся, если у реферера уже
+       получено вознаграждение за пользователя с этим же IP-хэшем.
+    """
     pool = require_db()
     now = now_utc()
     cur_month = now.strftime("%Y-%m")
@@ -438,6 +472,24 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
                 return format_user_row(row)
 
             user_name = row["first_name"] or "Друг"
+
+            # --- Антифрод 1: лимит триалов с одного IP ---
+            if ip_hash:
+                same_ip_claims = await conn.fetchval(
+                    """
+                    SELECT COUNT(*) FROM dh_users
+                    WHERE signup_ip_hash = $1
+                      AND user_id <> $2
+                      AND trial_claimed_at > NOW() - INTERVAL '30 days'
+                    """,
+                    ip_hash, uid,
+                )
+                if int(same_ip_claims or 0) >= MAX_TRIALS_PER_IP:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="С одного устройства уже активировали слишком много аккаунтов. Используйте основной аккаунт.",
+                    )
+
             cur_end = row["sub_until"]
             base_time = cur_end if (cur_end and cur_end > now) else now
             new_sub_until = base_time + timedelta(days=TRIAL_DAYS)
@@ -445,19 +497,40 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
             referred_by = row["referred_by"]
             ref_rewarded = bool(row["ref_rewarded"])
 
+            # --- Антифрод 2: реферал с того же IP, за которого уже платили ---
+            ref_reward_allowed = False
+            if referred_by and not ref_rewarded and referred_by != uid:
+                ref_reward_allowed = True
+                if ip_hash:
+                    dup = await conn.fetchval(
+                        """
+                        SELECT COUNT(*) FROM dh_users
+                        WHERE referred_by = $1
+                          AND ref_rewarded = TRUE
+                          AND user_id <> $2
+                          AND signup_ip_hash = $3
+                        """,
+                        referred_by, uid, ip_hash,
+                    )
+                    if int(dup or 0) > 0:
+                        ref_reward_allowed = False
+                        logger.info(f"Антифрод: реферальное вознаграждение {referred_by} не выдано — тот же IP, что у предыдущего реферала")
+
             updated_row = await conn.fetchrow(
                 """
                 UPDATE dh_users
                 SET trial_claimed = TRUE,
-                    sub_until = $2,
+                    trial_claimed_at = $2,
+                    signup_ip_hash = $3,
+                    sub_until = $4,
                     ref_rewarded = TRUE
                 WHERE user_id = $1
                 RETURNING *
                 """,
-                uid, new_sub_until,
+                uid, now, ip_hash, new_sub_until,
             )
 
-            if referred_by and not ref_rewarded and referred_by != uid:
+            if referred_by and ref_reward_allowed:
                 ref_row = await conn.fetchrow(
                     "SELECT * FROM dh_users WHERE user_id = $1 FOR UPDATE",
                     referred_by,
@@ -486,7 +559,8 @@ async def claim_trial_and_reward_referrer(uid: int) -> Dict[str, Any]:
                         )
                         referrer_to_notify = referred_by
                         days_awarded_to_ref = days_to_give
-                    else:
+                    elif ref_reward_allowed:
+                        # квота месяца исчерпана — счётчик растёт, дни не начисляются
                         await conn.execute(
                             "UPDATE dh_users SET ref_count = COALESCE(ref_count, 0) + 1 WHERE user_id = $1",
                             referred_by,
@@ -744,10 +818,28 @@ def rub(n) -> str:
     return f"{int(n):,}".replace(",", " ")
 
 
+def in_quiet_hours() -> bool:
+    """Тихие часы (по МСК): ночью не будим пользователей пушами. Сканирование просто пропускается."""
+    msk_now = now_utc() + timedelta(hours=3)
+    hour = msk_now.hour
+    if QUIET_START <= QUIET_END:
+        return QUIET_START <= hour < QUIET_END
+    # диапазон через полночь, например 23 -> 9
+    return hour >= QUIET_START or hour < QUIET_END
+
+
 async def monitor_scanner_loop():
     await asyncio.sleep(12)
+    last_quiet_log = ""
     while True:
         try:
+            if in_quiet_hours():
+                m = now_utc().strftime("%d-%m %H") [:9]
+                if m != last_quiet_log:
+                    logger.info(f"Тихие часы {QUIET_START}:00–{QUIET_END}:00 МСК — пуши приостановлены")
+                    last_quiet_log = m
+                await asyncio.sleep(300)
+                continue
             if not bot or not pg_pool:
                 await asyncio.sleep(30)
                 continue
@@ -1123,7 +1215,7 @@ async def api_claim_trial(auth: Dict[str, Any] = Depends(get_authenticated_user)
         username=auth["username"],
         candidate_ref_id=auth["ref_id"],
     )
-    user = await claim_trial_and_reward_referrer(auth["uid"])
+    user = await claim_trial_and_reward_referrer(auth["uid"], auth.get("ip_hash", ""))
     return JSONResponse({"status": "ok", "user": user})
 
 
