@@ -390,6 +390,7 @@ function lotCategory(title, desc) {
         user_id: 0,
         name: 'Охотник',
         trialClaimed: false,
+      termsAccepted: false,
         subActive: false,
         subUntil: null,
         secondsLeft: 0,
@@ -676,6 +677,14 @@ function lotCategory(title, desc) {
         state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; state.confirmDelete = false; render();
       }
       else if (action === 'delete-me-ask') { state.confirmDelete = true; render(); }
+      else if (action === 'accept-terms') {
+        fetch('/api/accept-terms', { method: 'POST', headers: authHeaders(), body: '{}' })
+          .then(async r => {
+            if (r.ok) { state.user.termsAccepted = true; render(); }
+            else showToast('Не получилось, попробуй снова');
+          })
+          .catch(() => showToast('Ошибка соединения'));
+      }
       else if (action === 'delete-me-confirm') {
         fetch('/api/delete-me', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ confirm: true }) })
           .then(async r => {
@@ -1116,7 +1125,7 @@ function lotCategory(title, desc) {
                   </div>
                   <div>
                     <div style="font-size:15px; font-weight:800;">Реферальная программа</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">+3 дня PRO за друга (${esc(state.user.refMonthDays)}/${esc(state.user.refMonthLimit)} дн. в мес.)</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">+${esc(state.user.refBonus || 3)} дня PRO за друга (${esc(state.user.refMonthDays)}/${esc(state.user.refMonthLimit)} дн. в мес.)</div>
                   </div>
                 </div>
               </div>
@@ -1168,6 +1177,33 @@ function lotCategory(title, desc) {
       }
 
       let modalHtml = '';
+      if (state.user.termsAccepted === false) {
+        // Первый вход: пользовательское соглашение до любого использования
+        modalHtml = `
+          <div class="modal-backdrop modal-center">
+            <div class="modal-card" style="text-align:left;">
+              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+                <i data-lucide="file-text" style="width:32px; height:32px;"></i>
+              </div>
+              <h2 style="font-size:20px; font-weight:800; text-align:center; margin-bottom:10px;">Условия использования</h2>
+              <div style="font-size:13px; color:var(--text-secondary); line-height:1.55; margin-bottom:16px;">
+                <b>DealHunter — независимый сервис.</b> Не связан с Wildberries, Ozon, Avito и Telegram.<br><br>
+                1) Мы показываем открытые цены и ссылки; не являются гарантом сделок.<br>
+                2) Лоты барахолок публикуются ссылкой на публичный пост — контакты продавцов мы не храним.<br>
+                3) Храним только твой Telegram ID и настройки. Удалить можно кнопкой в профиле.<br>
+                4) Подписка PRO — платно через Telegram Stars. До 18 лет — с согласия родителей.
+              </div>
+              <button class="btn btn-large btn-accent" data-action="accept-terms">
+                <i data-lucide="check-circle" style="width:18px; height:18px;"></i>
+                <span>Принимаю условия и продолжаю</span>
+              </button>
+            </div>
+          </div>
+        `;
+        app.innerHTML = contentHtml + modalHtml + '';
+        if (contentHtml && window.lucide) lucide.createIcons();
+        return;
+      }
       if (!state.user.trialClaimed) {
         modalHtml = `
           <div class="modal-backdrop modal-center">

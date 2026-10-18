@@ -439,6 +439,7 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS trial_claimed_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_start INT DEFAULT 23;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_end INT DEFAULT 9;")
+            await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_ip_hash ON dh_users (signup_ip_hash);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_referred_by ON dh_users (referred_by);")
         logger.info("PostgreSQL инициализирован.")
@@ -499,6 +500,11 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
     cur_month = now.strftime("%Y-%m")
     ref_month_days = int(row["ref_month_days"] or 0) if row["ref_month"] == cur_month else 0
 
+    try:
+        terms_at = row["terms_accepted_at"]
+    except (KeyError, Exception):
+        terms_at = None
+
     return {
         "user_id": row["user_id"],
         "name": row["first_name"] or "Охотник",
@@ -512,6 +518,8 @@ def format_user_row(row: asyncpg.Record) -> Dict[str, Any]:
         "refDaysEarned": row["ref_days_earned"] or 0,
         "refMonthDays": ref_month_days,
         "refMonthLimit": MAX_REF_DAYS_PER_MONTH,
+        "refBonus": REFERRAL_BONUS_DAYS,
+        "termsAccepted": bool(terms_at),
         "quietStart": int(row["quiet_start"] if row["quiet_start"] is not None else QUIET_START),
         "quietEnd": int(row["quiet_end"] if row["quiet_end"] is not None else QUIET_END),
         "botUsername": BOT_USERNAME_CACHE,
@@ -1344,6 +1352,13 @@ async def api_auth_token(data: dict = Body(...)):
 
 class DeleteMeReq(BaseModel):
     confirm: bool = Field(...)
+
+
+@app.post("/api/accept-terms")
+async def api_accept_terms(auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    pool = require_db()
+    await pool.execute("UPDATE dh_users SET terms_accepted_at = NOW() WHERE user_id = $1", auth["uid"])
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/api/delete-me")
