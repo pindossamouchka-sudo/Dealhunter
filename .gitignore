@@ -1,15 +1,8 @@
-# Секреты
-.env
-
-# Python
+﻿.env
+tg_session*
+tg_channels.txt
+tg_state.json
+avito_live.html
 __pycache__/
-*.pyc
-venv/
-.venv/
-
-# Артефакты парсера
-dump.html
-
-# Прочее
+*.session
 *.log
-.DS_Store
