@@ -762,6 +762,29 @@ function lotCategory(title, desc) {
 
     function renderInner(app) {
 
+      if ((!RAW_INIT_DATA) && !state.authError) {
+        app.innerHTML = `
+          <div class="screen-content" style="padding-top:44px;">
+            <div class="glass-card" style="text-align:center; padding:28px 18px;">
+              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+                <i data-lucide="send" style="width:28px; height:28px;"></i>
+              </div>
+              <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Открылось вне Telegram</h2>
+              <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:6px;">
+                Страница открыта в обычном браузере, поэтому Telegram не передаёт данные входа.
+              </p>
+              <p style="font-size:13px; font-weight:700; margin-bottom:18px;">
+                Найди бота <b>@DealHunterAvito_bot</b> в поиске Telegram, нажми <b>Старт</b> и в его сообщении кнопку
+                <b>«Запустить DealHunter PRO»</b>.
+              </p>
+              <button class="btn btn-large btn-accent" data-action="open-url" data-val="https://t.me/DealHunterAvito_bot">Открыть бота @DealHunterAvito_bot</button>
+            </div>
+          </div>
+        `;
+        if (window.lucide) lucide.createIcons();
+        return;
+      }
+
       if (state.authError) {
         app.innerHTML = `
           <div class="screen-content" style="padding-top:44px;">
