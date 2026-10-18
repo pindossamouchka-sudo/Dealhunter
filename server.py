@@ -82,12 +82,13 @@ CITY_DEST_MAP: Dict[str, int] = {
 }
 from cities import CITIES
 ALLOWED_CITIES = set(CITIES)
-ALLOWED_SOURCES = {"all", "Wildberries", "Ozon", "Avito", "TG"}
+ALLOWED_SOURCES = {"all", "Wildberries", "Ozon", "Avito", "TG", "GIFTS"}
 ALLOWED_HOSTS = {
     "www.wildberries.ru", "wildberries.ru",
     "www.ozon.ru", "ozon.ru",
     "www.avito.ru", "avito.ru",
     "t.me", "www.t.me",
+    "market.tonnel.network", "tonnel.network", "www.tonnel.network",
 }
 
 ACCESSORY_STOP_WORDS = (
@@ -1638,16 +1639,19 @@ async def api_worker_ingest(lots: List[IngestLot], x_worker_secret: str = Header
                 skipped += 1
                 continue
             profit = lot.market - lot.price
-            if lot.source not in ("Avito", "Ozon", "Wildberries", "TG"):
+            if lot.source not in ("Avito", "Ozon", "Wildberries", "TG", "GIFTS"):
                 skipped += 1
                 continue
-            if lot.source != "TG" and profit <= 0:
+            if lot.source not in ("TG", "GIFTS") and profit <= 0:
                 skipped += 1
                 continue
             if lot.source == "TG":
                 # у б/у-лот из публичной барахолки нет «рыночной» цены: показываем как есть
                 lot.market = lot.price
                 profit = 0
+            if lot.source == "GIFTS":
+                # подарки: city-фильтр в ленте не должен их резать
+                lot.city = "Вся РФ"
             await conn.execute(
                 """
                 INSERT INTO dh_lots (id, title, source, city, price, market, profit_rub, profit_pct, tags,

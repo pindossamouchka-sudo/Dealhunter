@@ -1,0 +1,30 @@
+# Список коллекций, по которым ловим скидки относительно floor
+# Одно название в строке. # — комментарий
+Plush Pepe
+Lunar Snake
+Toy Bear
+Precious Peach
+Skull Flower
+Lucky Locket
+Astral Shard
+Nail Bracelet
+Diamond Rose
+Mini Oscar
+Cheeky Mouse
+Vintage Cigar
+Eternal Rose
+Million Dollar
+Grand Piano
+Voodoo Doll
+Swag Bag
+Sparkle Squirrel
+Magic Potion
+Homemade Cake
+Scared Cat
+Sharp Tongue
+Whip Love
+Signed Hampster
+Bunny Ears
+Jester's Hat
+Neko Helmet
+Bowed Tie
