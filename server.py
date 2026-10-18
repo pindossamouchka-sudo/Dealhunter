@@ -802,10 +802,23 @@ async def fetch_db_external_lots(
         rows = await conn.fetch("SELECT * FROM dh_lots ORDER BY created_at DESC LIMIT 100")
 
     results = []
+    try:
+        from tg_scan import PRICE_FLOORS as TG_FLOORS, DEFAULT_FLOOR as TG_FLOOR
+    except Exception:
+        TG_FLOORS, TG_FLOOR = {}, 900
     q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
     for r in rows:
         if source != "all" and r["source"].lower() != source.lower():
             continue
+        if r["source"] == "TG":
+            tl = re.sub(r"^[\W_]+", "", r["title"]).lower()
+            floor = TG_FLOOR
+            for brand, fl in TG_FLOORS.items():
+                if brand in tl:
+                    floor = fl
+                    break
+            if r["price"] < floor or "запчаст" in tl:
+                continue
         if city and city not in r["city"] and r["city"] != "Вся РФ":
             continue
         if q_words:
