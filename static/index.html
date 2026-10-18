@@ -550,11 +550,13 @@ function lotCategory(title, desc) {
       const cityEl = document.getElementById('m-city');
       const srcEl = document.getElementById('m-source');
       const marginEl = document.getElementById('m-margin');
+      const extraEl = document.getElementById('m-extra');
 
       const title = titleEl ? titleEl.value.trim() : '';
       const city = cityEl ? cityEl.value : 'Москва';
       const source = srcEl ? srcEl.value : 'all';
       const minMargin = marginEl ? (parseInt(marginEl.value) || 15) : 15;
+      const extras = extraEl ? extraEl.value.trim() : '';
 
       if (!title || title.length < 2) {
         showToast('Введите название модели для поиска');
@@ -566,7 +568,7 @@ function lotCategory(title, desc) {
         const res = await fetch('/api/monitors', {
           method: 'POST',
           headers: authHeaders(),
-          body: JSON.stringify({ title, city, source, minMargin })
+          body: JSON.stringify({ title, city, source, minMargin, extras })
         });
         if (res.ok) {
           const data = await res.json();
@@ -638,6 +640,7 @@ function lotCategory(title, desc) {
       else if (action === 'refresh') { loadFeed(true); }
       else if (action === 'paywall') { state.showPaywall = true; render(); }
       else if (action === 'close-modal') {
+        if (el.classList.contains('modal-backdrop') && e.target.closest('.modal-sheet')) return;
         state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; render();
       }
       else if (action === 'source') { state.source = val; loadFeed(false); }
@@ -1094,7 +1097,7 @@ function lotCategory(title, desc) {
       } else if (state.showNewMonitor) {
         modalHtml = `
           <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
+            <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
@@ -1108,6 +1111,7 @@ function lotCategory(title, desc) {
                 <option value="Avito">Только Avito</option>
               </select>
               <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
+              <input type="text" id="m-extra" class="input-glass" placeholder="Уточнения через запятую: 256 ГБ, отличное, синий (не обязательно)" />
               <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
                 <i data-lucide="check" style="width:18px; height:18px;"></i>
                 <span>Запустить мониторинг</span>
@@ -1118,7 +1122,7 @@ function lotCategory(title, desc) {
       } else if (state.showPaywall) {
         modalHtml = `
           <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
+            <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <span class="profit-pill">DealHunter PRO</span>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
@@ -1152,7 +1156,7 @@ function lotCategory(title, desc) {
         const d = docs[state.legalDoc];
         modalHtml = `
           <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-sheet" onclick="event.stopPropagation();">
+            <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="font-size:15px; font-weight:800;">${esc(d.t)}</div>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>

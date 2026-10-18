@@ -320,6 +320,7 @@ async def init_db():
                     found_today INT DEFAULT 0,
                     found_date DATE DEFAULT CURRENT_DATE,
                     last_notified_lot TEXT DEFAULT '',
+                    extras TEXT DEFAULT '',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
 
@@ -366,6 +367,7 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0;")
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
+            await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS extras TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS signup_ip_hash TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS trial_claimed_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_start INT DEFAULT 23;")
@@ -900,10 +902,16 @@ async def monitor_scanner_loop():
                         continue
 
                     min_margin = int(m["min_margin"])
+                    extra_words = [w.strip().lower() for w in (m.get("extras") or "").replace(",", " ").split() if w.strip()]
                     eligible_lots = [
                         lot for lot in feed
                         if float(lot.get("profitPct", 0)) >= min_margin and lot.get("profitRub", 0) >= 1000
                     ]
+                    if extra_words:
+                        eligible_lots = [
+                            lot for lot in eligible_lots
+                            if all(w in (lot.get("title", "") + " " + str(lot.get("desc", ""))).lower() for w in extra_words)
+                        ]
                     if not eligible_lots:
                         continue
 
@@ -1202,6 +1210,7 @@ async def api_state(auth: Dict[str, Any] = Depends(get_authenticated_user)):
             "minMargin": r["min_margin"],
             "active": bool(r["active"]),
             "foundToday": r["found_today"],
+            "extras": r.get("extras", "") or "",
         }
         for r in rows
     ]
@@ -1292,6 +1301,7 @@ class MonitorCreateReq(BaseModel):
     city: str = Field(default="Москва", max_length=50)
     source: str = Field(default="all", max_length=30)
     minMargin: int = Field(default=15, ge=1, le=70)
+    extras: str = Field(default="", max_length=200)
 
 
 @app.post("/api/monitors")
@@ -1315,10 +1325,10 @@ async def api_create_monitor(
             raise HTTPException(status_code=400, detail="Лимит: не более 20 мониторов")
         await conn.execute(
             """
-            INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today, found_date)
-            VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0, CURRENT_DATE)
+            INSERT INTO dh_monitors (id, user_id, title, city, source, min_margin, active, found_today, found_date, extras)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0, CURRENT_DATE, $7)
             """,
-            mid, uid, data.title.strip(), city_val, source_val, data.minMargin,
+            mid, uid, data.title.strip(), city_val, source_val, data.minMargin, data.extras.strip(),
         )
         rows = await conn.fetch("SELECT * FROM dh_monitors WHERE user_id = $1 ORDER BY created_at DESC", uid)
 
@@ -1333,6 +1343,7 @@ async def api_create_monitor(
                 "minMargin": r["min_margin"],
                 "active": bool(r["active"]),
                 "foundToday": r["found_today"],
+                "extras": r.get("extras", "") or "",
             }
             for r in rows
         ],
