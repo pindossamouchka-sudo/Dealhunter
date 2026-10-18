@@ -137,6 +137,7 @@ def ton_rub_rate() -> float:
             "https://api.coingecko.com/api/v3/simple/price",
             params={"ids": "the-open-network", "vs_currencies": "rub"},
             timeout=15,
+            impersonate="chrome",
         )
         d = r.json()
         rate = float(d["the-open-network"]["rub"])
