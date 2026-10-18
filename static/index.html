@@ -560,22 +560,36 @@ function lotCategory(title, desc) {
       });
     }
 
+    const VIEWED_KEY = 'dh_viewed';
+
+    function getViewedIds() {
+      try {
+        const v = JSON.parse(localStorage.getItem(VIEWED_KEY) || '[]');
+        return Array.isArray(v) ? v : [];
+      } catch (er) {
+        return [];
+      }
+    }
+
+    function markViewed(lotId) {
+      const list = getViewedIds().filter(x => x !== lotId);
+      list.push(lotId);
+      try { localStorage.setItem(VIEWED_KEY, JSON.stringify(list.slice(-200))); } catch (er) {}
+    }
+
     async function claimLotAction(lotId, targetUrl) {
       openSafeUrl(targetUrl);
+      markViewed(lotId);
       const el = document.getElementById(`lot-card-${lotId}`);
       if (el) {
-        el.style.opacity = '0';
-        el.style.transform = 'scale(0.95)';
-        setTimeout(() => {
-          state.listings = state.listings.filter(x => x.id !== lotId);
-          render();
-        }, 220);
+        render();
+        showToast('✓ Отметил как просмотренный');
       }
-      await fetch('/api/claim-lot', {
+      fetch('/api/claim-lot', {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ lotId: String(lotId) })
-      });
+      }).catch(() => {});
     }
 
     async function createMonitorAction() {
@@ -769,13 +783,15 @@ function lotCategory(title, desc) {
     function renderLotCard(item) {
       const isSaved = state.user.savedIds.includes(item.id);
       const hasDiff = Number(item.profitRub) > 0;
+      const viewed = getViewedIds().includes(item.id);
       return `
-        <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;">
+        <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;${viewed ? 'opacity:0.72;' : ''}">
           <div class="row-between" style="margin-bottom: 8px;">
             <div style="display:flex; align-items:center; gap: 7px;">
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
               <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.city)} · ${esc(item.timeAgo)}</span>
             </div>
+            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ смотрел</span>' : ''}
           </div>
           <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${esc(item.title)}</h3>
           <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">
@@ -1347,6 +1363,14 @@ function lotCategory(title, desc) {
         // нет ни Telegram-подписи, ни сессии — сразу.getField экран входа не нужен, syncState покажет welcome
       }
       await syncState();
+
+      // Авто-обновление ленты: новые лоты подтягиваются сами, без ручного refresh
+      setInterval(() => {
+        if (document.hidden) return;
+        if (!state.user || !state.user.subActive) return;
+        if (state.tab !== 'feed' || state.detailId || state.showPaywall || state.showNewMonitor) return;
+        loadFeed(false);
+      }, 90000);
     })();
   </script>
 </body>

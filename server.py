@@ -1410,7 +1410,6 @@ async def api_live_feed(
         search_query=q,
         city=city,
         sort_by=sort,
-        excluded_ids=user.get("claimedIds", []),
     )
     return JSONResponse({
         "locked": False,
