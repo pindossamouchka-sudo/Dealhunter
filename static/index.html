@@ -381,6 +381,7 @@ function lotCategory(title, desc) {
       isRefreshing: false,
       updatedAt: '',
       detailId: null,
+      confirmDelete: false,
       sessionToken: null,
       showNewMonitor: false,
       showPaywall: false,
@@ -672,7 +673,25 @@ function lotCategory(title, desc) {
       else if (action === 'paywall') { state.showPaywall = true; render(); }
       else if (action === 'close-modal') {
         if (el.classList.contains('modal-backdrop') && e.target.closest('.modal-sheet')) return;
-        state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; render();
+        state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; state.confirmDelete = false; render();
+      }
+      else if (action === 'delete-me-ask') { state.confirmDelete = true; render(); }
+      else if (action === 'delete-me-confirm') {
+        fetch('/api/delete-me', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ confirm: true }) })
+          .then(async r => {
+            if (r.ok) {
+              try { localStorage.removeItem('dh_session'); } catch (er) {}
+              state.sessionToken = null;
+              state.user = { name: '', subActive: false, secondsLeft: 0, trialClaimed: true, monitors: [] };
+              state.confirmDelete = false;
+              showToast('Данные удалены');
+              state.authError = null;
+              setTimeout(() => { state.authError = 'Сессия удалена. Открой бота заново или запросите вход по /login'; render(); }, 400);
+            } else {
+              showToast('Не удалось удалить');
+            }
+          })
+          .catch(() => showToast('Ошибка соединения'));
       }
       else if (action === 'source') { state.source = val; loadFeed(false); }
       else if (action === 'category') { 
@@ -967,6 +986,10 @@ function lotCategory(title, desc) {
               ? state.listings.map(renderLotCard).join('')
               : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу предложений не найдено. Попробуйте изменить название бренда или город.</div>'
             }
+            <div style="text-align:center; font-size:10px; color:var(--text-muted); padding:14px 10px 20px;">
+              Независимый сервис · Не связан с Wildberries / Ozon / Avito / Telegram<br>
+              Не является гарантом сделок. Проверяйте продавцов.
+            </div>
           </div>
         `;
       }
@@ -1125,12 +1148,18 @@ function lotCategory(title, desc) {
 
             <div class="glass-card">
               <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация</div>
+              <div class="legal-row-note" style="font-size:11px; color:var(--text-muted); margin-top:10px; text-align:center;">
+                Независимый сервис · Не связан с Wildberries / Ozon / Avito / Telegram
+              </div>
               <div style="display:flex; flex-direction:column; gap:8px;">
                 <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="privacy">
                   <span>Политика конфиденциальности</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
                 </button>
                 <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="terms">
                   <span>Пользовательское соглашение</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
+                </button>
+                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px; color:#ff6b6b;" data-action="delete-me-ask">
+                  <span>Удалить мои данные</span><i data-lucide="trash-2" style="width:15px; height:15px;"></i>
                 </button>
               </div>
             </div>
@@ -1207,15 +1236,34 @@ function lotCategory(title, desc) {
             </div>
           </div>
         `;
+      } else if (state.confirmDelete) {
+        modalHtml = `
+          <div class="modal-backdrop" data-action="close-modal">
+            <div class="modal-sheet" style="max-width:420px;">
+              <div class="row-between" style="margin-bottom:12px;">
+                <div style="font-size:15px; font-weight:800; color:#ff6b6b;">Удалить мои данные?</div>
+                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+              </div>
+              <div style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:16px;">
+                Будут удалены навсегда: профиль, мониторы, настройка тихих часов, подписка PRO и история.
+                Сделку придётся начинать заново — и соцшат бонусы тоже.
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <button class="btn btn-large btn-glass" data-action="close-modal">Отмена</button>
+                <button class="btn btn-large" style="background:rgba(255,107,107,0.18); color:#ff6b6b;" data-action="delete-me-confirm">Удалить всё</button>
+              </div>
+            </div>
+          </div>
+        `;
       } else if (state.legalDoc) {
         const docs = {
           privacy: {
             t: 'Политика конфиденциальности',
-            b: '1. Сервис DealHunter обрабатывает исключительно публичный идентификатор Telegram ID, имя профиля и параметры фильтров для доставки уведомлений.\n\n2. Сервис не собирает паспортные данные, номера телефонов и банковские реквизиты.\n\n3. Пользователь вправе удалить свои данные, остановив бота.'
+            b: '1. DealHunter обрабатывает минимально необходимый набор данных: Telegram ID, имя профиля, настройки поиска и тихих часов, список твоих мониторов.\n\n2. Мы не собираем телефоны, адреса, платёжные реквизиты и фото. Оплата проходит внутри Telegram, мы не получаем карту.\n\n3. Данные продавцов не хранятся: в базе только цена, заголовок и ссылка на публичный пост/лот. DealHunter — не гарант и не посредник.\n\n4. Кнопка «Удалить мои данные» в профиле стирает профиль, мониторы и подписку немедленно и окончательно.'
           },
           terms: {
             t: 'Пользовательское соглашение',
-            b: '1. DealHunter является независимым справочно-информационным инструментом анализа открытых розничных цен.\n\n2. Расчёт рыночной планки производится автоматически по текущей выборке розничных предложений.\n\n3. Оплата тарифа PRO производится за Telegram Stars на 30 дней.'
+            b: '1. DealHunter — независимый справочный сервис анализа открытых цен. Не связан и не аффилирован с Wildberries, Ozon, Avito и Telegram.\n\n2. Рыночная планка — автоматическая оценка по текущей выборке предложений. Сервис не гарантирует цены сделок и актуальность лотов.\n\n3. Лоты с публичных барахолок Telegram публикуются со ссылкой на пост-источник; связь с продавцом происходит по инициативе пользователя напрямую в Telegram. Сервис не является гарантом и не участвует в сделках.\n\n4. Оплата тарифа PRO — 350 Telegram Stars за 30 дней, возвраты — по правилам Telegram.'
           }
         };
         const d = docs[state.legalDoc];

@@ -301,6 +301,13 @@ class FallbackSessions:
         return {"uid": uid, "first_name": first_name or "Охотник", "username": username or "", "ref_id": None}
 
 
+    def drop_sessions_for_uid(self, uid: int) -> int:
+        to_kill = [k for k, (u, *_rest) in self.sessions.items() if u == uid]
+        for k in to_kill:
+            self.sessions.pop(k, None)
+        return len(to_kill)
+
+
 fallback_sessions = FallbackSessions()
 
 
@@ -1333,6 +1340,27 @@ async def api_auth_token(data: dict = Body(...)):
     if not sess:
         raise HTTPException(status_code=401, detail="Ссылка устарела или уже использована. Запросите новую в боте")
     return JSONResponse({"token": sess})
+
+
+class DeleteMeReq(BaseModel):
+    confirm: bool = Field(...)
+
+
+@app.post("/api/delete-me")
+async def api_delete_me(data: DeleteMeReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    """Удаление всех данных пользователя: мониторы, настройки, подписка, сессия.
+    Финансовые записи (dh_payments) сохраняются для учёта сделок — они не содержат контактов."""
+    if not data.confirm:
+        raise HTTPException(status_code=400, detail="Нужно подтверждение")
+    uid = auth["uid"]
+    pool = require_db()
+    n_mon = 0
+    async with pool.acquire() as conn:
+        n_mon = await conn.fetchval("SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid) or 0
+        await conn.execute("DELETE FROM dh_monitors WHERE user_id = $1", uid)
+        await conn.execute("DELETE FROM dh_users WHERE user_id = $1", uid)
+    fallback_sessions.drop_sessions_for_uid(uid)
+    return JSONResponse({"status": "ok", "monitorsDeleted": n_mon, "message": "Данные удалены"})
 
 
 @app.post("/api/claim-trial")
