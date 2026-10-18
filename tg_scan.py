@@ -16,6 +16,7 @@ import json
 import time
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 
 BASE = Path(__file__).parent
@@ -23,6 +24,8 @@ load_dotenv(BASE / ".env")
 
 API_ID = os.getenv("TG_API_ID", "")
 API_HASH = os.getenv("TG_API_HASH", "")
+SERVER_URL = (os.getenv("SERVER_URL") or "").rstrip("/")
+WORKER_SECRET = os.getenv("WORKER_SECRET", "")
 SESSION_FILE = "tg_session"  # -> tg_session.session (не коммитится)
 CHANNELS_FILE = BASE / "tg_channels.txt"
 STATE_FILE = BASE / "tg_state.json"
@@ -74,15 +77,54 @@ def extract_lots(text: str, channel: str, msg_id: int):
     }
 
 
+def push_to_server(lots):
+    """Отправка лотов в DealHunter (source=TG). Возвращает сколько принято."""
+    if not SERVER_URL or not WORKER_SECRET:
+        print("push: нет SERVER_URL/WORKER_SECRET в .env")
+        return 0
+    payload = [{
+        "id": l["id"],
+        "title": l["title"][:200],
+        "source": "TG",
+        "city": "Москва",
+        "price": l["price"],
+        "market": l["price"],
+        "tags": ["барахолка"],
+        "sellerName": "Автор поста",
+        "sellerRating": 0,
+        "sellerReviews": 0,
+        "description": l["excerpt"],
+        "url": l["url"],
+    } for l in lots]
+    saved = 0
+    with httpx.Client(timeout=60) as c:
+        for k in range(0, len(payload), 100):
+            try:
+                r = c.post(f"{SERVER_URL}/api/worker/ingest", json=payload[k:k + 100],
+                           headers={"X-Worker-Secret": WORKER_SECRET})
+                print(f"push: {r.status_code} {r.text[:100]}")
+                if r.status_code == 200:
+                    saved += r.json().get("saved", 0)
+            except Exception as e:
+                print(f"push: ошибка {type(e).__name__}")
+    return saved
+
+
 async def run():
-    from telethon.sync import TelegramClient
+    from telethon import TelegramClient
 
     cmd = sys.argv[1] if len(sys.argv) > 1 else "--scan"
     if not API_ID or not API_HASH:
         print("В .env нужны TG_API_ID и TG_API_HASH (см. my.telegram.org)")
         return
 
-    with TelegramClient(SESSION_FILE, int(API_ID), API_HASH) as client:
+    client = TelegramClient(SESSION_FILE, int(API_ID), API_HASH)
+    await client.connect()
+    if not await client.is_user_authorized():
+        print("ERR: сессии нет — сначала выполни вход (tg_login.py)")
+        await client.disconnect()
+        return
+    try:
         if cmd == "--login":
             me = client.get_me()
             print(f"Вход ок: {me.first_name} (@{me.username or '—'})")
@@ -90,7 +132,7 @@ async def run():
 
         if cmd == "--list":
             print("Каналы/группы, в которых ты состоишь:")
-            for d in client.iter_dialogs(limit=100):
+            async for d in client.iter_dialogs(limit=100):
                 if d.is_channel or d.is_group:
                     username = getattr(d.entity, "username", None)
                     mark = "public" if username else "private"
@@ -115,7 +157,7 @@ async def run():
         for ch in chans:
             try:
                 min_id = 0 if full else state.get(ch, 0)
-                msgs = client.get_messages(ch, limit=100 if full else 50, min_id=min_id)
+                msgs = await client.get_messages(ch, limit=100 if full else 50, min_id=min_id)
             except Exception as e:
                 name = type(e).__name__
                 if name == "FloodWaitError":
@@ -149,7 +191,17 @@ async def run():
         LOTS_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=1), "utf-8")
         print(f"\nИтого свежих лотов: {len(all_lots)}. Всего в витрине: {len(merged)}. Файл: {LOTS_FILE.name}")
 
+        if all_lots and ("--push" in sys.argv or cmd == "--push"):
+            saved = push_to_server(all_lots)
+            print(f"Принято на сервер: {saved}")
+    finally:
+        await client.disconnect()
+
 
 if __name__ == "__main__":
     print("TG-скан DealHunter — читаю только публичные каналы, по своему аккаунту.")
-    run()
+    import asyncio
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        print(f"{type(e).__name__}: {e}")

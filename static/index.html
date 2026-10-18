@@ -166,6 +166,7 @@
     }
     .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
     .src-Avito { background: rgba(0, 170, 255, 0.15); color: #29B6F6; }
+    .src-TG { background: rgba(70, 217, 139, 0.16); color: #46d98b; }
     .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
     .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
   </style>
@@ -852,10 +853,20 @@ function lotCategory(title, desc) {
                 <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
                   <div>
                     <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    <div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
+                    ${item.source !== 'TG' ? `<div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>` : ''}
                   </div>
                   ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
                 </div>
+                ${item.source === 'TG' ? `
+                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:rgba(255,196,0,0.12); margin-bottom:12px;">
+                  <div style="width:40px; height:40px; border-radius:12px; background:rgba(255,196,0,0.18); color:#e8b608; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                    <i data-lucide="alert-triangle" style="width:19px; height:19px;"></i>
+                  </div>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:13px; font-weight:700;">Лот с барахолки Telegram</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">DealHunter — не гарант и не посредник. Проверяй продавца, не плати заранее.</div>
+                  </div>
+                </div>` : `
                 <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:12px;">
                   <div style="width:40px; height:40px; border-radius:12px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                     <i data-lucide="store" style="width:19px; height:19px;"></i>
@@ -867,12 +878,12 @@ function lotCategory(title, desc) {
                     </div>
                   </div>
                   <div style="font-size:11px; color:var(--text-muted); flex-shrink:0;">Продавец<br>${esc(item.source)}</div>
-                </div>
+                </div>`}
                 <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
                 ${renderSellerCheck(item.title, item.desc)}
                 <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
                   <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>Забрать лот на ${esc(item.source)}</span>
+                  <span>${item.source === 'TG' ? 'Открыть пост в Telegram' : 'Забрать лот на ' + esc(item.source)}</span>
                 </button>
               </div>
             </div>
@@ -929,6 +940,7 @@ function lotCategory(title, desc) {
               <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries Live</button>
               <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
               <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
+              <button class="cat-pill ${state.source === 'TG' ? 'active' : ''}" data-action="source" data-val="TG">Барахолка</button>
             </div>
 
             <select id="city-sel" class="input-glass" style="height:36px; margin:8px 0 0;">${CITIES.map(c => `<option value="${esc(c)}" ${c === state.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
