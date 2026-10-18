@@ -794,6 +794,10 @@ async def fetch_db_external_lots(
         await conn.execute(
             f"DELETE FROM dh_lots WHERE created_at < NOW() - INTERVAL '{LOT_TTL_HOURS} hours'"
         )
+        # гигиена TG: спрос-посты («купл/ищу/предложите») не лоты
+        await conn.execute(
+            "DELETE FROM dh_lots WHERE source = 'TG' AND title ~* '^([\\W_]+)?(купл|ищу|предложите|нужен|спрос)'"
+        )
         total_ext = await conn.fetchval("SELECT COUNT(*) FROM dh_lots")
         rows = await conn.fetch("SELECT * FROM dh_lots ORDER BY created_at DESC LIMIT 100")
 

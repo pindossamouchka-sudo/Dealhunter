@@ -37,6 +37,17 @@ SCAM_WORDS = [
     "не нужно приближаться", "гарантий нет",
 ]
 
+DEMAND_WORDS = None  # посты-спрос отсекаются regex-ом в extract_lots
+
+# минимальные правдоподобные цены (защита от «запчастей» и цен «со скупа»)
+PRICE_FLOORS = {
+    "iphone": 3500, "айфон": 3500, "galaxy": 3500, "samsung": 3500,
+    "macbook": 14000, "ноутбук": 8000, "playstation": 7000, "ps5": 7000, "ps4": 4500,
+    "airpods": 900, "наушники": 700, "watch": 1600, "часы": 1600,
+    "dyson": 4000, "redmi": 2500, "xiaomi": 2500, "honor": 2000, "poco": 2500,
+}
+DEFAULT_FLOOR = 900
+
 PRICE_RE = re.compile(r"(\d[\d\s\u00a0.,]{2,13})\s*(руб|₽|р\.|rub)", re.IGNORECASE)
 
 
@@ -57,6 +68,9 @@ def extract_lots(text: str, channel: str, msg_id: int):
     low = text.lower()
     if any(w in low for w in SCAM_WORDS):
         return None
+    head = low[:60]
+    if re.match(r"^[\W_]*(купл|ищу|предложите|нужен|спрос)", head):
+        return None
     m = PRICE_RE.search(text)
     if not m:
         return None
@@ -65,8 +79,19 @@ def extract_lots(text: str, channel: str, msg_id: int):
         return None
     first_line = text.strip().splitlines()[0]
     title = re.sub(r"^#\w+\s*", "", first_line).strip()[:120]
+    title = re.sub(r"^[\W_]+", "", title).strip()
     if len(title) < 5:
         title = text.strip()[:100]
+    tl = title.lower()
+    floor = DEFAULT_FLOOR
+    for brand, fl in PRICE_FLOORS.items():
+        if brand in tl:
+            floor = fl
+            break
+    if price < floor:
+        return None
+    if "запчаст" in tl:
+        return None
     return {
         "id": f"tg_{channel}_{msg_id}",
         "title": title,
