@@ -1,6 +1,7 @@
 import os
 import re
 import hmac
+import secrets
 from pathlib import Path
 import html as html_lib
 import json
@@ -17,6 +18,7 @@ from urllib.parse import quote, unquote, parse_qsl, urlparse
 import httpx
 import asyncpg
 from fastapi import FastAPI, Request, Header, HTTPException, Depends
+from fastapi import Body
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -229,7 +231,16 @@ def get_client_ip_hash(request: Request) -> str:
 
 
 async def get_authenticated_user(request: Request) -> Dict[str, Any]:
+    session_token = request.headers.get("X-Session-Token", "").strip()
     b64_header = request.headers.get("X-Tg-Init-Data-B64", "").strip()
+
+    if session_token and pg_pool and fallback_sessions:
+        auth = fallback_sessions.get_session_auth(session_token)
+        if auth:
+            check_rate_limit(auth["uid"])
+            auth["ip_hash"] = get_client_ip_hash(request)
+            return auth
+
     if not b64_header:
         raise HTTPException(status_code=401, detail="Запустите приложение внутри Telegram")
     try:
@@ -242,6 +253,54 @@ async def get_authenticated_user(request: Request) -> Dict[str, Any]:
     check_rate_limit(auth["uid"])
     auth["ip_hash"] = get_client_ip_hash(request)
     return auth
+
+
+# =====================================================================
+# 3.2 FALLBACK-АВТОРИЗАЦИЯ (Telegram Desktop открывает мини-апп в браузере, initData там нет)
+# =====================================================================
+class FallbackSessions:
+    """Одноразовые вход-ссылки из бота (#token=...) и长效 сессии в памяти процесса."""
+
+    def __init__(self):
+        self.login_tokens: Dict[str, Tuple[int, float, str, str]] = {}   # token -> (uid, expires_ts, first_name, username)
+        self.sessions: Dict[str, Tuple[int, float, str, str]] = {}  # token -> (uid, expires, name, username)
+        self._made = {}
+
+    def issue_login_token(self, uid: int, first_name: str = "", username: str = "") -> str:
+        tok = secrets.token_urlsafe(24)
+        self.login_tokens[tok] = (uid, time.time() + 300, first_name or "", username or "")
+        expired = [k for k, (_, exp, _, _) in self.login_tokens.items() if exp < time.time()]
+        for k in expired:
+            self.login_tokens.pop(k, None)
+        self._made[uid] = self._made.get(uid, 0) + 1
+        return tok
+
+    def redeem_login_token(self, tok: str) -> Optional[str]:
+        data = self.login_tokens.pop(tok, None)
+        if not data:
+            return None
+        uid, exp, first_name, username = data
+        if exp < time.time():
+            return None
+        sess = secrets.token_urlsafe(32)
+        self.sessions[sess] = (uid, time.time() + 30 * 86400, first_name, username)
+        expired = [k for k, (_, exp2, _, _) in self.sessions.items() if exp2 < time.time()]
+        for k in expired:
+            self.sessions.pop(k, None)
+        return sess
+
+    def get_session_auth(self, tok: str) -> Optional[Dict[str, Any]]:
+        data = self.sessions.get(tok)
+        if not data:
+            return None
+        uid, exp, first_name, username = data
+        if exp < time.time():
+            self.sessions.pop(tok, None)
+            return None
+        return {"uid": uid, "first_name": first_name or "Охотник", "username": username or "", "ref_id": None}
+
+
+fallback_sessions = FallbackSessions()
 
 
 def validate_and_clean_url(raw_url: str) -> str:
@@ -1006,6 +1065,23 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
     )
 
 
+@dp.message(Command("login"))
+async def cmd_login(message: types.Message):
+    uid = message.from_user.id
+    if message.chat.type != "private":
+        await message.answer("Ссылка входа отправляется только в личных сообщениях боту")
+        return
+    tok = fallback_sessions.issue_login_token(uid, (message.from_user.first_name or "")[:64],
+                                              (message.from_user.username or "")[:64])
+    await message.answer(
+        f"🔗 <b>Ссылка входа для компьютера</b> (действует 5 минут):\n\n{WEBAPP_URL}/#/t={tok}\n\n"
+        "Дождитесь страницы приложения — она сама запомнит тебя. "
+        "Новая ссылка — снова команда /login.",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 @dp.pre_checkout_query()
 async def on_pre_checkout(query: PreCheckoutQuery):
     payload = query.invoice_payload or ""
@@ -1228,6 +1304,17 @@ async def ensure_sponsor_subscription(uid: int):
         logger.warning(f"Проверка подписки не удалась (бот должен быть админом канала): {e}")
     if not ok:
         raise HTTPException(status_code=403, detail=f"Подпишитесь на {SPONSOR_CHANNEL} и нажмите ещё раз")
+
+
+@app.post("/api/auth-token")
+async def api_auth_token(data: dict = Body(...)):
+    tok = str(data.get("token", "")).strip()
+    if not tok or len(tok) < 16:
+        raise HTTPException(status_code=400, detail="Некорректный токен")
+    sess = fallback_sessions.redeem_login_token(tok)
+    if not sess:
+        raise HTTPException(status_code=401, detail="Ссылка устарела или уже использована. Запросите новую в боте")
+    return JSONResponse({"token": sess})
 
 
 @app.post("/api/claim-trial")

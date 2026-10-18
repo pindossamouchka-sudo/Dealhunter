@@ -209,10 +209,39 @@
     }
 
     function authHeaders() {
-      return {
-        'Content-Type': 'application/json',
-        'X-Tg-Init-Data-B64': encodeInitDataB64(RAW_INIT_DATA)
-      };
+      const headers = { 'Content-Type': 'application/json' };
+      if (RAW_INIT_DATA) {
+        headers['X-Tg-Init-Data-B64'] = encodeInitDataB64(RAW_INIT_DATA);
+      } else if (state.sessionToken) {
+        headers['X-Session-Token'] = state.sessionToken;
+      }
+      return headers;
+    }
+
+    // Fallback-вход: ссылка из бота вида .../#/t=TOKEN (Telegram Desktop открывает мини-апп в браузере).
+    async function redeemLoginToken() {
+      const m = String(location.hash || '').match(/t=([A-Za-z0-9_\-]{16,})/);
+      if (!m) return false;
+      try {
+        const res = await fetch('/api/auth-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: m[1] })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          try { localStorage.setItem('dh_session', data.token); } catch (e) {}
+          state.sessionToken = data.token;
+        } else {
+          const err = await res.json().catch(() => ({}));
+          state.authError = err.detail || 'Ссылка входа недействительна';
+        }
+      } catch (e) {
+        state.authError = 'Ошибка соединения при входе';
+      }
+      // убрать токен из адреса, чтобы не логировался и не утёк
+      history.replaceState(null, '', location.pathname + location.search);
+      return true;
     }
 
     function tgUser() {
@@ -351,6 +380,7 @@ function lotCategory(title, desc) {
       isRefreshing: false,
       updatedAt: '',
       detailId: null,
+      sessionToken: null,
       showNewMonitor: false,
       showPaywall: false,
       legalDoc: null,
@@ -774,8 +804,8 @@ function lotCategory(title, desc) {
                 Страница открыта в обычном браузере, поэтому Telegram не передаёт данные входа.
               </p>
               <p style="font-size:13px; font-weight:700; margin-bottom:18px;">
-                Найди бота <b>@DealHunterAvito_bot</b> в поиске Telegram, нажми <b>Старт</b> и в его сообщении кнопку
-                <b>«Запустить DealHunter PRO»</b>.
+                На телефоне: найди бота <b>@DealHunterAvito_bot</b>, нажми <b>Старт</b> и кнопку <b>«Запустить DealHunter PRO»</b>.
+                <br>На компьютере: отправь боту команду <b>/login</b> и открой ссылку из его сообщения.
               </p>
               <button class="btn btn-large btn-accent" data-action="open-url" data-val="https://t.me/DealHunterAvito_bot">Открыть бота @DealHunterAvito_bot</button>
             </div>
@@ -1214,7 +1244,14 @@ function lotCategory(title, desc) {
       if (window.lucide) lucide.createIcons();
     }
 
-    syncState();
+    (async () => {
+      try { state.sessionToken = localStorage.getItem('dh_session'); } catch (e) {}
+      const hadToken = await redeemLoginToken();
+      if (!RAW_INIT_DATA && !state.sessionToken) {
+        // нет ни Telegram-подписи, ни сессии — сразу.getField экран входа не нужен, syncState покажет welcome
+      }
+      await syncState();
+    })();
   </script>
 </body>
 </html>
