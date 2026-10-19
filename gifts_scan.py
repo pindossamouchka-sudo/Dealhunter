@@ -2,15 +2,16 @@
 """
 gifts_scan — «gift sniper» для DealHunter.
 
-Мониторим NFT-подарки Telegram сразу на двух маркетах:
-  • Tonnel  (market.tonnel.network) — API gifts2.tonnel.network/api/pageGifts
-  • Portals (portal-market.com)    — API portal-market.com/api/nfts/search
+Мониторим NFT-подарки Telegram сразу на трёх маркетах:
+  • Tonnel   (market.tonnel.network) — gifts2.tonnel.network/api/pageGifts
+  • Portals  (portal-market.com)     — порталовский REST
+  • Fragment (fragment.com)          — каталог без кошелька + HTML карточек
 
 Честная «рыночная планка» = МЕДИАНА цен всех текущих листингов модели,
-случайных из двух маркетов (Тоннель + Portals вместе).
+собранных из трёх маркетов (Tonnel + Portals + Fragment вместе).
 Лот объявляем выгодным, если его цена ≤ (100 - DEAL_PCT)% от медианы
 и выборка по модели достаточно велика (>= MIN_SAMPLES лотов).
-Ссылка на лот — прямая (Tonnel: /gift/<gift_id>, Portals: t.me/nft/<tg_id>).
+Ссылки — прямые: Tonnel /gift/<id>, Portals t.me/nft/<tg_id>, Fragment /gift/<slug>.
 """
 import os
 import sys
@@ -63,6 +64,8 @@ DEAL_PCT = 10.0
 MIN_SAMPLES = 5
 # Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
+# Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
+FRAGMENT_TOP = 2
 
 DEFAULT_WATCHLIST = [
     "Plush Pepe", "Lunar Snake", "Toy Bear", "Precious Peach", "Skull Flower",
@@ -164,9 +167,14 @@ def tonnel_fetch_pages(gift_name: str):
             model = (it.get("model") or "").strip()
             if not model or model == "—":
                 continue
+            rar = parse_model_rarity(model)
+            model_base = re.sub(r"\s*\([\d.,]+%\)", "", model).strip()
+            if not model_base:
+                continue
             out.append({
                 "price_ton": float(price),
-                "model": model,
+                "model": model_base,
+                "rarity": rar,
                 "backdrop": it.get("backdrop") or "—",
                 "symbol": it.get("symbol") or "—",
                 "gift_id": it.get("gift_id") or "",
@@ -299,6 +307,125 @@ def parse_model_rarity(model: str) -> float:
     return float(m.group(1).replace(",", "."))
 
 
+# ---------------- Fragment ----------------
+
+_FRAGMENT_FIX = {
+    # watchlist-имя (norm) -> fragment-slug, где автоматика не справляется
+}
+
+_fragment_slugs = None
+
+
+def fragment_slugs():
+    """{norm_имени_коллекции: fragment_slug} — тянем один раз за прогон."""
+    global _fragment_slugs
+    if _fragment_slugs is not None:
+        return _fragment_slugs
+    try:
+        import asyncio
+        if sys.platform.startswith("win"):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        from fragment_api import FragmentCatalog
+        cols = asyncio.run(FragmentCatalog().list_collections())
+        out = {}
+        for c in cols:
+            slug = (c.get("slug") or "").strip()
+            nm = _norm(c.get("name") or "")
+            if slug:
+                out.setdefault(nm, slug)
+        # на Fragment коллекции во множ. числе: снимем 's' и наоборот
+        for nm, slug in list(out.items()):
+            if nm:
+                out.setdefault(nm + "s", slug)
+                out.setdefault(nm + "es", slug)
+                if nm.endswith("s"):
+                    out.setdefault(nm[:-1], slug)
+                    if nm.endswith("es"):
+                        out.setdefault(nm[:-2], slug)
+        _fragment_slugs = out
+        return out
+    except Exception as e:
+        print(f"  [!] Fragment каталог: {type(e).__name__} {e}")
+        _fragment_slugs = {}
+        return {}
+
+
+def fragment_gift_page_attrs(slug: str):
+    """(model, backdrop, symbol) — парсим HTML карточки Fragment."""
+    try:
+        r = requests.get(f"https://fragment.com/gift/{slug}",
+                         headers=UA_HEADERS, impersonate="chrome", timeout=40)
+        if r.status_code != 200:
+            return None
+        rows = re.findall(
+            r'<div class="table-cell">(Model|Backdrop|Symbol)</div>\s*</td>\s*<td>\s*'
+            r'<div class="table-cell">\s*<div class="table-cell-value tm-value">\s*'
+            r'<a[^>]*>([^<]+)</a>\s*<span class="tm-rarity">\s*([\d.,]+)%\s*</span>',
+            r.text, re.S)
+        d = {t: (v.strip(), float(rr.replace(",", ""))) for t, v, rr in rows}
+        return d
+    except Exception:
+        return None
+
+
+def fragment_fetch(gift_name: str):
+    """list[dict] lot-ов Fragment для одной коллекции (дешёвые сверху)."""
+    slugs = fragment_slugs()
+    want = _norm(gift_name)
+    slug = slugs.get(want) or _FRAGMENT_FIX.get(want)
+    if not slug:
+        print(f"  [i] Fragment: коллекция не найдена: {gift_name}")
+        return []
+    try:
+        import asyncio
+        if sys.platform.startswith("win"):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        from fragment_api import FragmentCatalog
+        catalog = FragmentCatalog()
+        items = asyncio.run(catalog.list_gifts(collection_slug=slug, limit=20, sort="price"))
+    except Exception as e:
+        print(f"  [!] Fragment {gift_name}: {type(e).__name__} {e}")
+        return []
+    out = []
+    attrs_by_slug = {}
+    top = 0
+    for it in items:
+        try:
+            price = float(it.get("price_ton"))
+        except (TypeError, ValueError):
+            continue
+        fslug = it.get("slug") or ""
+        if price <= 0 or not fslug:
+            continue
+        if top < FRAGMENT_TOP:
+            attrs = fragment_gift_page_attrs(fslug)
+            time.sleep(random.uniform(1.0, 2.0))
+            if attrs and attrs.get("Model"):
+                (mv, mr) = attrs["Model"]
+                (bv, _br) = attrs.get("Backdrop", ("—", 0))
+                (sv, _sr) = attrs.get("Symbol", ("—", 0))
+                attrs_by_slug[fslug] = (mv, bv, sv, mr)
+                top += 1
+            else:
+                # карточка не открылась — не бесконечно рвёмся, пробуем следующую
+                continue
+        if fslug not in attrs_by_slug:
+            # знаем только цену — модель неизвестна, в медиану не пойдёт, идём мимо
+            continue
+        mv, bv, sv, mr = attrs_by_slug[fslug]
+        out.append({
+            "price_ton": price,
+            "model": mv,
+            "backdrop": bv or "—",
+            "symbol": sv or "—",
+            "rarity": mr,
+            "gift_num": it.get("number") or "",
+            "venue": "Fragment",
+            "slug": fslug,
+        })
+    return out
+
+
 def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
@@ -342,6 +469,8 @@ def find_with_model_deals(all_lots, rate: float):
 
 
 def lot_url(d: dict) -> str:
+    if d["venue"] == "Fragment" and d.get("slug"):
+        return f"https://fragment.com/gift/{d['slug']}"
     if d["venue"] == "Tonnel" and d.get("gift_id"):
         return f"https://market.tonnel.network/gift/{d['gift_id']}"
     if d.get("tg_id"):
@@ -358,15 +487,18 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         market_rub = price_rub + 1
     profit = market_rub - price_rub
     pct = int(round(profit * 100 / market_rub))
-    rar_txt = f" ({clean_rarity(d['rarity'])}%)" if d["rarity"] else ""
+    rar_txt = f" ({clean_rarity(d.get('rarity', 0))}%)" if d.get("rarity") else ""
     title = f"{d['gift']} — {d['model']}{rar_txt}"
     tags = ["Подарок", d["gift"], d["model"], d["venue"]]
     if d.get("backdrop") and d["backdrop"] != "—":
         tags.append(d["backdrop"])
     tags = tags[:8]
-    fl = d.get("floors") or {}
-    fl_txt = " · ".join(f"{v}∈{k}" for k, v in fl.items()) if fl else ""
-    lot_id = f"{d['venue'].lower()}-{d.get('gift_id', '') or d.get('tg_id', '') or d.get('gift_num', '')}"
+    if d["venue"] == "Fragment":
+        lot_id = f"fragment-{d.get('slug', '') or d.get('gift_num', '')}"
+    elif d["venue"] == "Tonnel":
+        lot_id = f"tonnel-{d.get('gift_id', '') or d.get('gift_num', '')}"
+    else:
+        lot_id = f"portals-{d.get('tg_id', '') or d.get('gift_num', '')}"
     return {
         "id": lot_id[:100],
         "title": title[:200],
@@ -380,11 +512,9 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         "sellerReviews": 0,
         "description": (
             f"NFT-подарок Telegram · модель {d['model']} · фон {d['backdrop']} · "
-            f"символ {d['symbol']} · №{d['gift_num'] or '—'} · "
-            f"цена {d['price_ton']:.2f} TON, медиана рынка {d['fair_ton']:.2f} TON"
-            + (f" ({d.get('floors') and len(d['floors']) or 0} маркетов)" if d.get('floors') else "")
-            + (f" · floor: {fl_txt}" if fl_txt else "")
-            + f" · скидка ~{pct}% от медианы"
+            f"символ {d['symbol']} · №{d.get('gift_num') or '—'} · "
+            f"цена {d['price_ton']:.2f} TON, медиана рынка {d['fair_ton']:.2f} TON "
+            f"(Tonnel+Portals+Fragment) · скидка ~{pct}% от медианы"
         )[:1000],
         "url": lot_url(d),
     }
@@ -425,12 +555,15 @@ def main():
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
         p_lots, _ = portals_fetch_pages(gift)
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
-        total = t_lots + p_lots
+        f_lots = fragment_fetch(gift)
+        time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
+        total = t_lots + p_lots + f_lots
         all_lots[gift] = total
-        venue_t = sum(1 for l in t_lots)
-        venue_p = sum(1 for l in p_lots)
+        venue_t = len(t_lots)
+        venue_p = len(p_lots)
+        venue_f = len(f_lots)
         ok.append((gift, len(total), venue_t, venue_p))
-        print(f"  {gift}: {len(total)} лотов (Tonnel {venue_t} / Portals {venue_p})")
+        print(f"  {gift}: {len(total)} лотов (Tonnel {venue_t} / Portals {venue_p} / Fragment {venue_f})")
     deals = find_with_model_deals(all_lots, rate)
     # за прогон не спамим ленту: топ-20 по размеру скидки, уникально по (gift|model|venue)
     deals.sort(key=lambda d: 1 - d["price_ton"] / d["fair_ton"])
