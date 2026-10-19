@@ -165,12 +165,12 @@
       border-radius: 99px; font-size: 12px; font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.35); white-space: nowrap;
     }
     .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
-    .src-Avito { background: rgba(0, 170, 255, 0.15); color: #29B6F6; }
+    .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
     .src-TG { background: rgba(70, 217, 139, 0.16); color: #46d98b; }
     .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
     .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
     .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
-    .src-PLAYEROK { background: rgba(124, 77, 255, 0.18); color: #B388FF; }
+    .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
   </style>
 </head>
 <body>
@@ -985,10 +985,8 @@ function lotCategory(title, desc) {
               <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" data-action="source" data-val="all">Все площадки</button>
               <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries Live</button>
               <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
-              <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
               <button class="cat-pill ${state.source === 'TG' ? 'active' : ''}" data-action="source" data-val="TG">Барахолка</button>
               <button class="cat-pill ${state.source === 'GIFTS' ? 'active' : ''}" data-action="source" data-val="GIFTS">Подарки</button>
-              <button class="cat-pill ${state.source === 'PLAYEROK' ? 'active' : ''}" data-action="source" data-val="PLAYEROK">Playerok</button>
             </div>
 
             <select id="city-sel" class="input-glass" style="height:36px; margin:8px 0 0;">${CITIES.map(c => `<option value="${esc(c)}" ${c === state.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -1255,10 +1253,10 @@ function lotCategory(title, desc) {
               <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (Dyson, iPhone 16, Xiaomi)..." />
               <select id="m-city" class="input-glass">${CITIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
               <select id="m-source" class="input-glass">
-                <option value="all">Все площадки (WB + Ozon + Avito)</option>
+                <option value="all">Все площадки (WB + Ozon + Подарки)</option>
                 <option value="Wildberries">Только Wildberries</option>
                 <option value="Ozon">Только Ozon</option>
-                <option value="Avito">Только Avito</option>
+                <option value="GIFTS">Только Подарки</option>
               </select>
               <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
               <input type="text" id="m-extra" class="input-glass" placeholder="Уточнения через запятую: 256 ГБ, отличное, синий (не обязательно)" />

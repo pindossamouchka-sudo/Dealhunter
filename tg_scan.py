@@ -37,7 +37,21 @@ SCAM_WORDS = [
     "не нужно приближаться", "гарантий нет",
 ]
 
-DEMAND_WORDS = None  # посты-спрос отсекаются regex-ом в extract_lots
+# посты-спрос («куплю», «ищу», «сколько стоит?») — НЕ лоты
+DEMAND_WORDS = [
+    "куплю", "покуплю", "скуп", "ищу", "нужен ", "нужна ", "нужно ", "подскажите",
+    "посоветуйте", "кто может", "кто продаст", "сколько стоит", "актуально?",
+    "порекомендуйте", "ищется", "ищеться",
+]
+
+# пост должен ПОЗВОНИТЬ, что sells: продаю / отдаю / продам / цена ... / есть ...
+SALE_WORDS = [
+    "продам", "продаю", "продаётся", "продается", "продажа", "продаж",
+    "отдам", "отдаю", "отдаётся", "отдается", "содам", "могу отдать",
+    "есть в наличии", "в наличии", "забрать", "заберёшь", "заберите",
+    "термин: ", "торг", "цена:", "цена ", "цена -", "по цене",
+    "свежий айфон", "новый, гаранти",
+]
 
 # минимальные правдоподобные цены (защита от «запчастей» и цен «со скупа»)
 PRICE_FLOORS = {
@@ -48,18 +62,31 @@ PRICE_FLOORS = {
 }
 DEFAULT_FLOOR = 900
 
-PRICE_RE = re.compile(r"(\d[\d\s\u00a0.,]{2,13})\s*(руб|₽|р\.|rub)", re.IGNORECASE)
+PRICE_RE = re.compile(r"(\d[\d\s\u00a0.,]{2,13})\s*(руб|₽|р\.|р(?!\w)|rub)", re.IGNORECASE)
+
+
+def normalize_price(raw: str):
+    """«1 800 000» -> 1800000; «m1 180000 ₽» -> 180000 (что­бы приставка «m1» не приросла к цене)."""
+    groups = re.split(r"[\s\u00a0]+", (raw or "").strip())
+    digits = re.sub(r"[^\d]", "", (raw or "").replace(",", "").replace(".", ""))
+    if not digits:
+        return 0
+    val = int(digits)
+    if val >= 1_000_000 and len(groups) >= 2:
+        # «1 180000» / «1 800 000» / «m1 180000»: похоже, одна лишняя ведущая группа
+        alt = int(re.sub(r"[^\d]", "", " ".join(groups[1:])))
+        if 0 < alt < val:
+            val = alt
+    if val >= 1_000_000:
+        return 0
+    return val
 
 
 def clean_price(raw: str):
     digits = re.sub(r"[^\d]", "", raw or "")
     if not digits:
         return 0
-    val = int(digits)
-    # страховка от цен формата «15.000» -> 15 или «1 500 000» -> мусор
-    if val >= 1_000_000:
-        return 0
-    return val
+    return int(re.sub(r"^0+", "", digits) or "0")
 
 
 def extract_lots(text: str, channel: str, msg_id: int):
@@ -68,13 +95,20 @@ def extract_lots(text: str, channel: str, msg_id: int):
     low = text.lower()
     if any(w in low for w in SCAM_WORDS):
         return None
-    head = low[:60]
-    if re.match(r"^[\W_]*(купл|ищу|предложите|нужен|спрос)", head):
+    if any(w in low for w in DEMAND_WORDS):
         return None
-    m = PRICE_RE.search(text)
-    if not m:
+    if not any(w in low for w in SALE_WORDS):
+        # без явного «продаю/отдаю/цена:» — болтовня в чате, не лот
         return None
-    price = clean_price(m.group(1))
+    # берём первую цену-кандидат, которая похожа на правду (иначе пропускаем)
+    if not PRICE_RE.search(text):
+        return None
+    price = 0
+    for m in PRICE_RE.finditer(text):
+        cand = normalize_price(m.group(1))
+        if 300 <= cand <= 999_999:
+            price = cand
+            break
     if price < 300:  # отсекаем «100р» болтовню и цены-пустышки
         return None
     first_line = text.strip().splitlines()[0]
