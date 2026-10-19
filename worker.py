@@ -374,6 +374,7 @@ def check_cities():
 def main():
     dump_flag = "--dump" in sys.argv
     check = "--check-cities" in sys.argv
+    once = "--once" in sys.argv
     if not SERVER or not SECRET:
         if not (dump_flag or check):
             sys.exit("Задайте SERVER_URL и WORKER_SECRET")
@@ -384,7 +385,7 @@ def main():
     elif check:
         check_cities()
     else:
-        run(client_for(None))
+        run(client_for(None), once=once)
 
 
 if __name__ == "__main__":

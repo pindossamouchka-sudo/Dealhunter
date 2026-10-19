@@ -2,6 +2,8 @@
 tg_session*
 tg_channels.txt
 tg_state.json
+tg_login_state.json
+tg_lots.json
 avito_live.html
 __pycache__/
 *.session

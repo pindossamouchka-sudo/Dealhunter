@@ -170,6 +170,7 @@
     .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
     .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
     .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
+    .src-PLAYEROK { background: rgba(124, 77, 255, 0.18); color: #B388FF; }
   </style>
 </head>
 <body>
@@ -987,6 +988,7 @@ function lotCategory(title, desc) {
               <button class="cat-pill ${state.source === 'Avito' ? 'active' : ''}" data-action="source" data-val="Avito">Avito</button>
               <button class="cat-pill ${state.source === 'TG' ? 'active' : ''}" data-action="source" data-val="TG">Барахолка</button>
               <button class="cat-pill ${state.source === 'GIFTS' ? 'active' : ''}" data-action="source" data-val="GIFTS">Подарки</button>
+              <button class="cat-pill ${state.source === 'PLAYEROK' ? 'active' : ''}" data-action="source" data-val="PLAYEROK">Playerok</button>
             </div>
 
             <select id="city-sel" class="input-glass" style="height:36px; margin:8px 0 0;">${CITIES.map(c => `<option value="${esc(c)}" ${c === state.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
