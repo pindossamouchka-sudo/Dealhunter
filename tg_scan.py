@@ -203,8 +203,12 @@ async def run():
             print(f"Нет {CHANNELS_FILE.name}. Создай файл, по одному @каналу на строку.")
             print("Подсказка: python tg_scan.py --list  покажет твои каналы.")
             return
-        chans = [l.strip().lstrip("@") for l in CHANNELS_FILE.read_text(encoding="utf-8").splitlines()
-                 if l.strip() and not l.strip().startswith("#")]
+        chans = []
+        for l in CHANNELS_FILE.read_text(encoding="utf-8").splitlines():
+            l = l.strip().lstrip("@")
+            if not l or l.startswith("#"):
+                continue
+            chans.append(l.split()[0])  # «@имя # описание» -> имя
         if not chans:
             print("tg_channels.txt пустой.")
             return
@@ -224,13 +228,19 @@ async def run():
                     print(f"[{ch}] FloodWait {wait}с — ждём (правило белой зоны)")
                     time.sleep(min(wait, 300))
                     continue
+                import traceback
                 print(f"[{ch}] пропуск: {name}")
+                traceback.print_exc()
                 continue
             got = []
             for m in msgs:
                 if not m.message:
                     continue
-                lot = extract_lots(m.message, ch, m.id)
+                lot = None
+                try:
+                    lot = extract_lots(m.message, ch, m.id)
+                except Exception as e:
+                    print(f"[{ch}] extract_lots ошибка {type(e).__name__}: {e} | msg={m.message[:80]!r}")
                 if lot:
                     got.append(lot)
             last_id = max([m.id for m in msgs], default=None)

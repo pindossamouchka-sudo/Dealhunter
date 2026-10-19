@@ -543,7 +543,17 @@ def push_to_server(lots: list) -> tuple:
         return 0, len(lots)
 
 
+def ping_server():
+    """Держим сервер тёплым (Render free засыпает без HTTP-запросов)."""
+    import httpx
+    try:
+        httpx.get(f"{SERVER_URL}/health", timeout=20)
+    except Exception:
+        pass
+
+
 def main():
+    ping_server()
     watchlist = load_watchlist()
     print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan старт: коллекций {len(watchlist)}")
     rate = ton_rub_rate()

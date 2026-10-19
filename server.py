@@ -1645,14 +1645,17 @@ async def api_worker_ingest(lots: List[IngestLot], x_worker_secret: str = Header
             if lot.source not in ("Ozon", "Wildberries", "TG", "GIFTS"):
                 skipped += 1
                 continue
-            if lot.source not in ("TG", "GIFTS") and profit <= 0:
-                skipped += 1
-                continue
             if lot.source == "TG":
                 # у б/у-лот из публичной барахолки нет «рыночной» цены: показываем как есть
                 lot.market = lot.price
                 profit = 0
             if lot.source == "GIFTS":
+                # цифровые товары: город-фильтр не режем, но гоним только честно выгодные
+                lot.city = "Вся РФ"
+                pct_on_market = (profit * 100.0 / lot.market) if lot.market > 0 else 0
+                if profit <= 300 or pct_on_market < 8:
+                    skipped += 1
+                    continue
                 # цифровые товары: city-фильтр в ленте не должен их резать
                 lot.city = "Вся РФ"
             await conn.execute(

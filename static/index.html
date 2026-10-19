@@ -167,10 +167,6 @@
     .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
     .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
     .src-TG { background: rgba(70, 217, 139, 0.16); color: #46d98b; }
-    .src-Ozon { background: rgba(0, 91, 255, 0.18); color: #448AFF; }
-    .src-Wildberries { background: rgba(203, 17, 171, 0.18); color: #E040FB; }
-    .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
-    .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
   </style>
 </head>
 <body>
@@ -486,6 +482,20 @@ function lotCategory(title, desc) {
       }
     }
 
+    let wakeRetried = false;
+
+    async function fetchFeedJson(params, timeoutMs = 45000) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(`/api/live-feed?${params.toString()}`, { headers: authHeaders(), signal: ctrl.signal });
+        if (!res.ok) return null;
+        return await res.json();
+      } finally {
+        clearTimeout(t);
+      }
+    }
+
     async function loadFeed(notify = false) {
       state.isRefreshing = true;
       render();
@@ -497,9 +507,18 @@ function lotCategory(title, desc) {
           q: state.searchQuery,
           sort: state.sortBy
         });
-        const res = await fetch(`/api/live-feed?${params.toString()}`, { headers: authHeaders() });
-        if (res.ok) {
-          const data = await res.json();
+        let data = null;
+        try {
+          data = await fetchFeedJson(params);
+        } catch (e1) {
+          // скорее всего сервер «просыпается» (Render free) — пробуем ещё раз
+          if (!wakeRetried) {
+            wakeRetried = true;
+            showToast('⏳ Сервер просыпается, ещё 30 секунд...');
+            try { data = await fetchFeedJson(params, 45000); } catch (e2) {}
+          }
+        }
+        if (data) {
           if (data.locked && state.user.trialClaimed) state.showPaywall = true;
           state.listings = data.items || [];
           state.updatedAt = data.updatedAt || '';
@@ -585,7 +604,7 @@ function lotCategory(title, desc) {
       const el = document.getElementById(`lot-card-${lotId}`);
       if (el) {
         render();
-        showToast('✓ Отметил как просмотренный');
+        showToast('✓ Помечено: забрали');
       }
       fetch('/api/claim-lot', {
         method: 'POST',
@@ -793,7 +812,7 @@ function lotCategory(title, desc) {
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
               <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.city)} · ${esc(item.timeAgo)}</span>
             </div>
-            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ смотрел</span>' : ''}
+            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ забрали</span>' : ''}
           </div>
           <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${esc(item.title)}</h3>
           <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">
@@ -903,13 +922,23 @@ function lotCategory(title, desc) {
                   </div>
                   ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
                 </div>
+                ${item.source === 'GIFTS' ? `
+                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:rgba(255,171,64,0.12); margin-bottom:12px;">
+                  <div style="width:40px; height:40px; border-radius:12px; background:rgba(255,171,64,0.18); color:#e8a208; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                    <i data-lucide="clock" style="width:19px; height:19px;"></i>
+                  </div>
+                  <div style="flex:1; min-width:0;">
+                    <div style="font-size:13px; font-weight:700;">Подарок может уйти за минуты</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">Если ссылка уже неуспешна (куплё) — лот снят с продажи, это нормально: тарифы считают_today.</div>
+                  </div>
+                </div>` : ''}
                 ${item.source === 'TG' ? `
                 <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:rgba(255,196,0,0.12); margin-bottom:12px;">
                   <div style="width:40px; height:40px; border-radius:12px; background:rgba(255,196,0,0.18); color:#e8b608; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
                     <i data-lucide="alert-triangle" style="width:19px; height:19px;"></i>
                   </div>
                   <div style="flex:1; min-width:0;">
-                    <div style="font-size:13px; font-weight:700;">Лот с барахолки Telegram</div>
+                    <div style="font-size:13px; font-weight:700;">Лот с бу-рынка Telegram</div>
                     <div style="font-size:11px; color:var(--text-secondary);">DealHunter — не гарант и не посредник. Проверяй продавца, не плати заранее.</div>
                   </div>
                 </div>` : `
@@ -983,9 +1012,7 @@ function lotCategory(title, desc) {
 
             <div class="pills-scroll">
               <button class="cat-pill ${state.source === 'all' ? 'active' : ''}" data-action="source" data-val="all">Все площадки</button>
-              <button class="cat-pill ${state.source === 'Wildberries' ? 'active' : ''}" data-action="source" data-val="Wildberries">Wildberries Live</button>
-              <button class="cat-pill ${state.source === 'Ozon' ? 'active' : ''}" data-action="source" data-val="Ozon">Ozon</button>
-              <button class="cat-pill ${state.source === 'TG' ? 'active' : ''}" data-action="source" data-val="TG">Барахолка</button>
+              <button class="cat-pill ${state.source === 'TG' ? 'active' : ''}" data-action="source" data-val="TG">Бу рынок</button>
               <button class="cat-pill ${state.source === 'GIFTS' ? 'active' : ''}" data-action="source" data-val="GIFTS">Подарки</button>
             </div>
 
@@ -1014,7 +1041,7 @@ function lotCategory(title, desc) {
               : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу предложений не найдено. Попробуйте изменить название бренда или город.</div>'
             }
             <div style="text-align:center; font-size:10px; color:var(--text-muted); padding:14px 10px 20px;">
-              Независимый сервис · Не связан с Wildberries / Ozon / Avito / Telegram<br>
+              Независимый сервис радара бу-лотов и подарков<br>
               Не является гарантом сделок. Проверяйте продавцов.
             </div>
           </div>
@@ -1176,7 +1203,7 @@ function lotCategory(title, desc) {
             <div class="glass-card">
               <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация</div>
               <div class="legal-row-note" style="font-size:11px; color:var(--text-muted); margin-top:10px; text-align:center;">
-                Независимый сервис · Не связан с Wildberries / Ozon / Avito / Telegram
+                Независимый сервис радара бу-лотов и подарков
               </div>
               <div style="display:flex; flex-direction:column; gap:8px;">
                 <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="privacy">
@@ -1205,7 +1232,7 @@ function lotCategory(title, desc) {
               </div>
               <h2 style="font-size:20px; font-weight:800; text-align:center; margin-bottom:10px;">Условия использования</h2>
               <div style="font-size:13px; color:var(--text-secondary); line-height:1.55; margin-bottom:16px;">
-                <b>DealHunter — независимый сервис.</b> Не связан с Wildberries, Ozon, Avito и Telegram.<br><br>
+                <b>DealHunter — независимый сервис.</b><br><br>
                 1) Мы показываем открытые цены и ссылки; не являются гарантом сделок.<br>
                 2) Лоты барахолок публикуются ссылкой на публичный пост — контакты продавцов мы не храним.<br>
                 3) Храним только твой Telegram ID и настройки. Удалить можно кнопкой в профиле.<br>
@@ -1232,7 +1259,7 @@ function lotCategory(title, desc) {
               <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
               <h2 style="font-size:21px; font-weight:800; margin-bottom:8px;">Вам подарок: 3 дня PRO!</h2>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
-                Активируйте бесплатный доступ к мониторингу цен <b>Wildberries, Ozon и Avito</b> и мгновенным уведомлениям в Telegram.
+                Активируйте бесплатный доступ к <b>бу-рынку и подаркам Telegram</b> с мгновенными уведомлениями.
               </p>
               <button class="btn btn-large btn-accent" data-action="claim-trial">
                 <i data-lucide="zap" style="width:18px; height:18px;"></i>
@@ -1250,12 +1277,11 @@ function lotCategory(title, desc) {
                 <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
                 <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (Dyson, iPhone 16, Xiaomi)..." />
+              <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (iPhone 16, LEGO, Dyson)..." />
               <select id="m-city" class="input-glass">${CITIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
               <select id="m-source" class="input-glass">
-                <option value="all">Все площадки (WB + Ozon + Подарки)</option>
-                <option value="Wildberries">Только Wildberries</option>
-                <option value="Ozon">Только Ozon</option>
+                <option value="all">Все площадки (Бу рынок + Подарки)</option>
+                <option value="TG">Только Бу рынок</option>
                 <option value="GIFTS">Только Подарки</option>
               </select>
               <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
@@ -1317,7 +1343,7 @@ function lotCategory(title, desc) {
           },
           terms: {
             t: 'Пользовательское соглашение',
-            b: '1. DealHunter — независимый справочный сервис анализа открытых цен. Не связан и не аффилирован с Wildberries, Ozon, Avito и Telegram.\n\n2. Рыночная планка — автоматическая оценка по текущей выборке предложений. Сервис не гарантирует цены сделок и актуальность лотов.\n\n3. Лоты с публичных барахолок Telegram публикуются со ссылкой на пост-источник; связь с продавцом происходит по инициативе пользователя напрямую в Telegram. Сервис не является гарантом и не участвует в сделках.\n\n4. Оплата тарифа PRO — 350 Telegram Stars за 30 дней, возвраты — по правилам Telegram.'
+            b: '1. DealHunter — независимый справочный сервис анализа открытых цен. Не является маркетплейсом и не аффилирован с Telegram.\n\n2. Рыночная планка — автоматическая оценка по текущей выборке предложений. Сервис не гарантирует цены сделок и актуальность лотов.\n\n3. Лоты с публичных бу-рынка и маркетов публикуются со ссылкой на источник; связь с продавцом происходит по инициативе пользователя напрямую в Telegram. Сервис не является гарантом и не участвует в сделках.\n\n4. Оплата тарифа PRO — 350 Telegram Stars за 30 дней, возвраты — по правилам Telegram.'
           }
         };
         const d = docs[state.legalDoc];
