@@ -59,7 +59,12 @@ PORTALS_PAGES = 3
 PORTALS_LIMIT = 30
 
 # Порог «выгодности»: цена ≤ медианы минус DEAL_PCT%
-DEAL_PCT = 10.0
+# 18% — чтобы после комиссий перепродажи (~8%) сделка оставалась в плюсе
+DEAL_PCT = 18.0
+# Оценка комиссий при перепродаже (доля от цены продажи)
+RESELL_FEE_PCT = 8.0
+# Минимальная чистая прибыль в ₽ после вычета комиссий
+MIN_NET_RUB = 1500
 # Минимальное число листингов в выборке модели, чтобы ей верить
 MIN_SAMPLES = 5
 # Антибот-пауза между запросами
@@ -289,6 +294,7 @@ def portals_fetch_pages(gift_name: str):
                 "symbol": (attrs.get("symbol") or {}).get("value", "—"),
                 "rarity": rarity,
                 "tg_id": it.get("tg_id") or "",
+                "id": it.get("id") or "",   # UUID для deep-link Portals
                 "venue": "Portals",
             })
             if len(out) >= 90:
@@ -453,6 +459,11 @@ def find_with_model_deals(all_lots, rate: float):
                 floors.setdefault(l["venue"], l["price_ton"])
             for l in mlots:
                 if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT):
+                    gross_rub = rate * (median - l["price_ton"])
+                    fees_rub = rate * median * RESELL_FEE_PCT / 100.0
+                    net_rub = gross_rub - fees_rub
+                    if net_rub < MIN_NET_RUB:
+                        continue  # мелкие скидки не перекрывают комиссии
                     rar = parse_model_rarity(model)
                     deals.append({
                         "gift": gift, "model": model, "rarity": rar,
@@ -461,6 +472,8 @@ def find_with_model_deals(all_lots, rate: float):
                         "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
                         "gift_num": l.get("gift_num", ""),
                         "tg_id": l.get("tg_id", ""),
+                        "portals_id": l.get("id", ""),
+                        "net_rub": round(net_rub),
                         "floors": floors,
                     })
                 else:
@@ -475,9 +488,11 @@ def lot_url(d: dict) -> str:
         # прямой deep-link на конкретный лот в мини-аппе Tonnel (market.tonnel.network из РФ часто не грузится)
         return f"https://t.me/tonnel_network_bot/gift?startapp={d['gift_id']}"
     if d["venue"] == "Portals":
-        # per-item deep link у Portals непубличен — открываем Store мини-аппа,
-        # номер лота (№N) показан в карточке и описании для поиска
-        return "https://t.me/portals/market"
+        # deep-link из самого клиента Portals: бот @portals_market_bot, /market?startapp=gift_<uuid>
+        uid = d.get("portals_id") or ""
+        if uid:
+            return f"https://t.me/portals_market_bot/market?startapp=gift_{uid}"
+        return "https://t.me/portals_market_bot/market"
     if d.get("tg_id"):
         return f"https://t.me/nft/{d['tg_id']}"
     return "https://t.me/tonnel_network_bot"
@@ -506,9 +521,11 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         lot_id = f"portals-{d.get('tg_id', '') or d.get('gift_num', '')}"
     extra = ""
     if d["venue"] == "Portals":
-        extra = f" · покупка: в Store Portals найди №{d.get('gift_num') or ''}"
+        extra = " · покупка: кнопка «Забрать» открывает лот прямо в Portals"
     elif d["venue"] == "Tonnel":
         extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
+    if d.get("net_rub"):
+        extra += f" · чистыми ~{d['net_rub']:,} ₽ после комиссий".replace(",", " ")
     return {
         "id": lot_id[:100],
         "title": title[:200],

@@ -72,6 +72,11 @@ QUIET_END = int(os.getenv("QUIET_END", "9")) % 24
 
 BUNNY_STARS_URL = "https://t.me/BunnyStarsBot?startapp=ref_5123484212"
 
+# Секретные коды: подписка по крипто-коду. Формат DH-<8hex>-<HMAC8hex>.
+# PROMO_SECRET живёт только в .env, в репо его нет. Код одноразовый (таблица dh_promo_used).
+PROMO_SECRET = os.getenv("PROMO_SECRET", "").strip()
+PROMO_DAYS = 30
+
 CITY_DEST_MAP: Dict[str, int] = {
     "Москва": -1257786,
     "Санкт-Петербург": -1198055,
@@ -428,6 +433,12 @@ async def init_db():
                     payload TEXT DEFAULT '',
                     refunded BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS dh_promo_used (
+                    code TEXT PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    used_at TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS claimed_ids TEXT DEFAULT '[]';")
@@ -1116,6 +1127,60 @@ async def cmd_login(message: types.Message):
         "Новая ссылка — снова команда /login.",
         parse_mode="HTML",
         disable_web_page_preview=True,
+    )
+
+
+@dp.message(Command("code"))
+async def cmd_promo_code(message: types.Message):
+    """Секретное меню: /code DH-XXXXXXXX-XXXXXXXX — +30 дней PRO.
+    Код HMAC-подписан PROMO_SECRET (живёт только в .env), одноразовый."""
+    uid = message.from_user.id
+    if message.chat.type != "private":
+        return
+    raw = (message.text or "").split(" ", 1)
+    if len(raw) < 2 or not raw[1].strip():
+        await message.answer("🔑 Формат: <code>/code DH-XXXXXXXX-XXXXXXXX</code>")
+        return
+    code = raw[1].strip().upper().replace(" ", "")
+    m = re.match(r"^DH-?([0-9A-F]{8})-?([0-9A-F]{8})$", code)
+    if not m:
+        await message.answer("❌ Неверный формат кода.")
+        return
+    if not PROMO_SECRET:
+        await message.answer("⏳ Приём кодов временно закрыт.")
+        return
+    rnd, sig = m.group(1).lower(), m.group(2).lower()
+    expected = hmac.new(PROMO_SECRET.encode(), ("DH" + rnd).encode(), hashlib.sha256).hexdigest()[:8]
+    if not hmac.compare_digest(sig, expected):
+        await message.answer("❌ Код не принят.")
+        return
+    if not pg_pool:
+        await message.answer("⏳ Сервис initialization — попробуй через минуту.")
+        return
+    pool = require_db()
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                inserted = await conn.fetchval(
+                    "INSERT INTO dh_promo_used (code, user_id) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING code",
+                    "DH" + rnd + expected, uid,
+                )
+                if not inserted:
+                    await message.answer("❌ Этот код уже кто-то активировал.")
+                    return
+                await conn.execute("UPDATE dh_users SET trial_claimed = TRUE WHERE user_id = $1", uid)
+                row = await conn.fetchrow("SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+                now = now_utc()
+                base = row["sub_until"] if (row and row["sub_until"] and row["sub_until"] > now) else now
+                new_end = base + timedelta(days=PROMO_DAYS)
+                await conn.execute("UPDATE dh_users SET sub_until = $2 WHERE user_id = $1", uid, new_end)
+    except Exception:
+        logger.exception(f"промокод: ошибка зачисления uid={uid} code={rnd}")
+        await message.answer("⏳ Техническая ошибка. Попробуй позже.")
+        return
+    await message.answer(
+        f"🎉 <b>Код активирован!</b>\n\n✅ +{PROMO_DAYS} дней PRO начислено.\n🚀 Открой приложение — радар уже охотой занят.",
+        parse_mode="HTML",
     )
 
 

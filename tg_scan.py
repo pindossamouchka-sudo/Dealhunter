@@ -100,6 +100,86 @@ def _glitch_ratio(text: str) -> float:
         return 0.0
     return weird / letters
 
+
+# ---- название и «каталог продавца» ----
+
+PRODUCT_PAT = re.compile(
+    r"(iphone|айфон|samsung|galaxy|macbook|playstation|ps\d|airpods|наушник|"
+    r"apple\s*watch|смарт[-\s]?часы|xiaomi|redmi|poco|honor|dyson|ноутбук|tablet|"
+    r"ipad|планшет|монитор|видеокарта|гпу|geforce|radeon|компьютер|системник|"
+    r"мотоцикл|мото\b|квадроцикл|скутер|самокат|телевизор|камера|фотопларат)",
+    re.IGNORECASE,
+)
+
+# строки-«описания», которые не годятся для названия (реклама, условия,_State)
+GENERIC_TITLE_WORDS = [
+    "весь товар", "оригинал", "гаранти", "в наличии", "по наличию", "без торга",
+    "доставка", "отправка", "самовывоз", "идеальн", "состояни", "все работает",
+    "в комплект", "комплект", "всё работает", "оригинальный", "проверяйте",
+    "не гарантирую", "осмотр", "проверка",
+]
+
+SALE_PREFIX_RE = re.compile(
+    r"^(?:прода[мюяё]|продает[сся]|продается|продаж|отда[мюяё]|реализ[у]?|"
+    r"обмен(?:\w{0,3})?|срочн|уступ[а-я]{0,3}|продам)\s*", re.IGNORECASE,
+)
+
+
+def _is_catalog_post(text: str) -> bool:
+    """пост-«каталог» магазина (много разных товаров) — не частный лот"""
+    low = text.lower()
+    cats = set(m.group(0).lower() for m in PRODUCT_PAT.finditer(low))
+    marks = len(cats)
+    iphones = set(re.findall(r"(?:iphone|айфон)\s*(\d{1,2}|1[0-8]g?|x|se)", low, re.I))
+    if marks >= 3 or len(iphones) >= 3:
+        return True
+    # «и др.» / «много ...» / перечисления через запятую с ценами
+    if low.count(",") >= 6 and marks >= 2:
+        return True
+    return False
+
+
+def _make_title(text: str) -> str:
+    """вытащить из поста название самой вещи: строка/сегмент с продуктом + модель,
+    не рекламная прелюдия («весь товар новый, оригинал…»)"""
+    raw_lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    # разбиваем длинные строки на фразы (по . ; ! ?)
+    lines = []
+    for ln in raw_lines[:12]:
+        parts = re.split(r"[.;!?]\s*", ln)
+        lines.extend([p.strip() for p in parts if p.strip()])
+    best, best_score = None, -99
+    for ln in lines[:16]:
+        if len(ln) > 95:
+            continue
+        tl = ln.lower()
+        score = 0
+        if PRODUCT_PAT.search(tl):
+            score += 8
+        if re.search(r"\d", tl):
+            score += 2
+        for g in GENERIC_TITLE_WORDS:
+            if g in tl:
+                score -= 5
+        if 10 <= len(ln) <= 70:
+            score += 2
+        if score > best_score:
+            best, best_score = ln, score
+    title = (best if best is not None else (raw_lines[0] if raw_lines else text.strip()))
+    # чистим: хэштеги, эмодзи, «продам/срочно», висячую пунктуацию
+    title = re.sub(r"#\w+", "", title)
+    title = "".join(
+        ch for ch in title
+        if not (0x1F000 <= ord(ch) <= 0x1FAFF) and ord(ch) not in (0x200D, 0xFE0F, 0x2764, 0x2B50, 0x2728, 0x2705)
+    )
+    for _ in range(3):
+        t2 = SALE_PREFIX_RE.sub("", title).strip()
+        if t2 == title:
+            break
+        title = t2
+    title = re.sub(r"^[\W_]+", "", title).strip(" −–—-:,. ").strip()
+    return title[:120]
+
 # минимальные правдоподобные цены (защита от «запчастей» и цен «со скупа»)
 PRICE_FLOORS = {
     "iphone": 3500, "айфон": 3500, "galaxy": 3500, "samsung": 3500,
@@ -156,20 +236,26 @@ def extract_lots(text: str, channel: str, msg_id: int):
     first_line0 = text.strip().splitlines()[0]
     if _is_noise_title(re.sub(r"^#\w+\s*", "", first_line0).strip()[:120]) and not has_sale:
         return None
-    # берём первую цену-кандидат, которая похожа на правду (иначе пропускаем)
-    if not PRICE_RE.search(text):
-        return None
+    # берём цену: сначала с валютой, иначе голое число в конце первой строки
     price = 0
     for m in PRICE_RE.finditer(text):
         cand = normalize_price(m.group(1))
         if 300 <= cand <= 999_999:
             price = cand
             break
+    if price == 0:
+        #------------------------------------------------------------------ fallback: цена без валюты в самом конце первой строки
+        # 'iPhone 18 pro 256gb eSIM. 96000' / 'Продам айфон 13 … 26000'
+        fl = text.strip().splitlines()[0]
+        for m in re.finditer(r"(\d[\d\s\u00a0.,]{2,9})(?!\w)", fl):
+            cand = normalize_price(m.group(1))
+            if 300 <= cand <= 999_999:
+                price = cand
     if price < 300:  # отсекаем «100р» болтовню и цены-пустышки
+        return None    # каталог продавца (много разных телефонов/товаров) — не частный лот
+    if _is_catalog_post(text):
         return None
-    first_line = text.strip().splitlines()[0]
-    title = re.sub(r"^#\w+\s*", "", first_line).strip()[:120]
-    title = re.sub(r"^[\W_]+", "", title).strip()
+    title = _make_title(text)
     if len(title) < 5:
         title = text.strip()[:100]
     tl = title.lower()
