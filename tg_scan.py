@@ -33,8 +33,9 @@ LOTS_FILE = BASE / "tg_lots.json"
 
 SCAM_WORDS = [
     "быстрый перевод", "залог", "заложу", "крипт", "сатош", "bitcoin", "btc",
-    "без осмотра", "перевод на карту до", "только полный перевод", "оплатите заранее",
-    "не нужно приближаться", "гарантий нет",
+    "быстро?", "срочно нужно день", "скиньте", "ради бога", "молю",
+    "лутануть", "полкатора", "займ под",
+
 ]
 
 # посты-спрос («куплю», «ищу», «сколько стоит?») — НЕ лоты
@@ -50,6 +51,9 @@ NOISE_TITLE_WORDS = [
     "объявление", "правила", "администрация", "напоминаю", "обращаюсь",
     "по наличию", "спешите", "планируется", "анонс", "опрос", "поздравля",
 ]
+# служебные аккуратные начала («Цена: 1», «Размер 80») — блокируем,
+# только если после служебного слова нет товара
+SERVICE_TITLE_WORDS = ["цена:", "размер ", "цвет "]
 
 def _is_noise_title(title: str) -> bool:
     tl = (title or "").lower()
@@ -60,6 +64,11 @@ def _is_noise_title(title: str) -> bool:
     if tl.rstrip("!").strip().count(" ") <= 2 and tl.rstrip("!").count("!") >= 1 and len(tl) < 22:
         return True
     return False
+
+
+def _is_service_title(title: str) -> bool:
+    tl = (title or "").lower()
+    return any(w in tl for w in SERVICE_TITLE_WORDS) and not PRODUCT_PAT.search(tl)
 
 # пост должен ПОЗВОНИТЬ, что sells: продаю / отдаю / продам / цена ... / есть ...
 SALE_WORDS = [
@@ -79,6 +88,8 @@ NON_ITEM_WORDS = [
     "нужны люди", "ищем людей", "набираем", "на полную ставку", "оплата",
     "опыт", "установ", "настро", "автоматизац", "виндовс", "windows",
     "регион", "склад", "видеонаблюд",
+    # подработка-объявления («5000р на руки», «займёт 2 часа»)
+    "на руки", "займёт", "займет", "в час", "в день", "дневная",
 ]
 
 def _glitch_ratio(text: str) -> float:
@@ -107,7 +118,10 @@ PRODUCT_PAT = re.compile(
     r"(iphone|айфон|samsung|galaxy|macbook|playstation|ps\d|airpods|наушник|"
     r"apple\s*watch|смарт[-\s]?часы|xiaomi|redmi|poco|honor|dyson|ноутбук|tablet|"
     r"ipad|планшет|монитор|видеокарта|гпу|geforce|radeon|компьютер|системник|"
-    r"мотоцикл|мото\b|квадроцикл|скутер|самокат|телевизор|камера|фотопларат)",
+    r"мотоцикл|мото\b|квадроцикл|скутер|самокат|телевизор|камера|фотопларат|"
+    r"джинс|куртк|кроссовк|ботинк|сапоги|сапог|худи|футболк|брюк|свитер|"
+    r"плать|рубашк|пальто|обув|сумк|рюкз|теплый|кофт|шапк|штан|велосипед|бмв|bmw|mercedes|toyota|tacoma|"
+    r"аквари|айфон|плед|овчар|пошив)",
     re.IGNORECASE,
 )
 
@@ -254,7 +268,8 @@ def extract_lots(text: str, channel: str, msg_id: int):
             if 300 <= cand <= 999_999:
                 price = cand
     if price < 300:  # отсекаем «100р» болтовню и цены-пустышки
-        return None    # каталог продавца (много разных телефонов/товаров) — не частный лот
+        return None
+    # каталог продавца (много разных телефонов/товаров) — не частный лот
     if _is_catalog_post(text):
         return None
     title = _make_title(text)
@@ -262,6 +277,13 @@ def extract_lots(text: str, channel: str, msg_id: int):
         title = text.strip()[:100]
     tl = title.lower()
     if _is_noise_title(title) and not has_sale:
+        return None
+    # служебные-как-название («Цена: 1», «Размер 80») — не вещь,
+    # но если после служебного слова есть продукт («Размер 80 (джинсы)») — берём
+    if _is_service_title(title):
+        return None
+    # сверхкороткое название + копеечная цена — мусор
+    if len(title) < 13 and price < 3000:
         return None
     floor = DEFAULT_FLOOR
     for brand, fl in PRICE_FLOORS.items():
