@@ -1447,6 +1447,39 @@ async def api_delete_me(data: DeleteMeReq, auth: Dict[str, Any] = Depends(get_au
     return JSONResponse({"status": "ok", "monitorsDeleted": n_mon, "message": "Данные удалены"})
 
 
+@app.post("/api/redeem-code")
+async def api_redeem_code(data: dict = Body(...), auth: Dict[str, Any] = Depends(get_authenticated_user)):
+    """Активация одноразового HMAC-кода (+30 дней PRO) внутри приложения."""
+    if not PROMO_SECRET:
+        raise HTTPException(status_code=503, detail="Приём кодов временно закрыт")
+    code = str(data.get("code", "") or "").strip().upper().replace(" ", "")
+    m = re.match(r"^DH-?([0-9A-F]{8})-?([0-9A-F]{8})$", code)
+    if not m:
+        raise HTTPException(status_code=400, detail="Неверный формат кода")
+    rnd, sig = m.group(1).lower(), m.group(2).lower()
+    expected = hmac.new(PROMO_SECRET.encode(), ("DH" + rnd).encode(), hashlib.sha256).hexdigest()[:8]
+    if not hmac.compare_digest(sig, expected):
+        raise HTTPException(status_code=403, detail="Код не принят")
+    uid = auth["uid"]
+    await upsert_user_atomic(uid, auth["first_name"], auth["username"])
+    pool = require_db()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inserted = await conn.fetchval(
+                "INSERT INTO dh_promo_used (code, user_id) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING RETURNING code",
+                "DH" + rnd + expected, uid,
+            )
+            if not inserted:
+                raise HTTPException(status_code=409, detail="Этот код уже кто-то активировал")
+            await conn.execute("UPDATE dh_users SET trial_claimed = TRUE WHERE user_id = $1", uid)
+            row = await conn.fetchrow("SELECT sub_until FROM dh_users WHERE user_id = $1 FOR UPDATE", uid)
+            now = now_utc()
+            base = row["sub_until"] if (row and row["sub_until"] and row["sub_until"] > now) else now
+            new_end = base + timedelta(days=PROMO_DAYS)
+            await conn.execute("UPDATE dh_users SET sub_until = $2 WHERE user_id = $1", uid, new_end)
+    return JSONResponse({"status": "ok", "daysGranted": PROMO_DAYS})
+
+
 @app.post("/api/claim-trial")
 async def api_claim_trial(auth: Dict[str, Any] = Depends(get_authenticated_user)):
     await ensure_sponsor_subscription(auth["uid"])

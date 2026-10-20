@@ -383,6 +383,7 @@ function lotCategory(title, desc) {
       sessionToken: null,
       showNewMonitor: false,
       showPaywall: false,
+      showPromo: false,
       legalDoc: null,
       user: {
         user_id: 0,
@@ -709,7 +710,32 @@ function lotCategory(title, desc) {
       else if (action === 'paywall') { state.showPaywall = true; render(); }
       else if (action === 'close-modal') {
         if (el.classList.contains('modal-backdrop') && e.target.closest('.modal-sheet')) return;
-        state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; state.confirmDelete = false; render();
+        state.showPaywall = false; state.showNewMonitor = false; state.legalDoc = null; state.confirmDelete = false; state.showPromo = false; render();
+      }
+      else if (action === 'show-promo') { state.showPromo = true; render(); setTimeout(() => { const i = document.getElementById('promo-code'); if (i) i.focus(); }, 60); }
+      else if (action === 'redeem-code-btn') {
+        (async () => {
+          const inp = document.getElementById('promo-code');
+          const msg = document.getElementById('promo-msg');
+          const btn = document.getElementById('redeem-btn');
+          const code = (inp && inp.value || '').trim();
+          if (!code) { if (msg) { msg.style.display = 'block'; msg.textContent = 'Набери код: DH-XXXXXXXX-XXXXXXXX'; msg.style.color = 'var(--text-secondary)'; } return; }
+          if (btn) { btn.disabled = true; }
+          try {
+            const r = await fetch('/api/redeem-code', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ code }) });
+            const d = await r.json().catch(() => ({}));
+            if (r.ok) {
+              state.showPromo = false;
+              showToast('🎉 Код активирован: +' + (d.daysGranted || 30) + ' дней PRO');
+              syncState();
+              render();
+            } else {
+              if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger, #e05050)'; msg.textContent = d.detail || 'Код не принят'; }
+            }
+          } catch (e) {
+            if (msg) { msg.style.display = 'block'; msg.textContent = 'Ошибка соединения'; msg.style.color = 'var(--danger, #e05050)'; }
+          } finally { if (btn) btn.disabled = false; }
+        })();
       }
       else if (action === 'delete-me-ask') { state.confirmDelete = true; render(); }
       else if (action === 'accept-terms') {
@@ -1128,6 +1154,10 @@ function lotCategory(title, desc) {
                 <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
                 <span>Пополнить Stars выгодно (BunnyStars)</span>
               </button>
+
+              <div style="margin-top:12px; text-align:center;">
+                <span data-action="show-promo" style="font-size:11px; color:var(--text-muted); cursor:pointer; text-decoration:underline dotted;">У меня есть код</span>
+              </div>
             </div>
 
             <div class="glass-card">
@@ -1250,8 +1280,7 @@ function lotCategory(title, desc) {
         return;
       }
       if (!state.user.trialClaimed) {
-        modalHtml = `
-          <div class="modal-backdrop modal-center">
+        modalHtml = `          <div class="modal-backdrop modal-center">
             <div class="modal-card" style="text-align:center;">
               <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="gift" style="width:32px; height:32px;"></i>
@@ -1312,6 +1341,26 @@ function lotCategory(title, desc) {
               <button class="btn btn-large btn-stars-bot" data-action="open-url" data-val="${BUNNY_STARS_LINK}">
                 <i data-lucide="external-link" style="width:17px; height:17px;"></i>
                 <span>Где взять Stars? Купить в BunnyStars</span>
+              </button>
+              <div style="margin-top:12px; text-align:center;">
+                <span data-action="show-promo" style="font-size:11px; color:var(--text-muted); cursor:pointer; text-decoration:underline dotted;">У меня есть код</span>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (state.showPromo) {
+        modalHtml = `
+          <div class="modal-backdrop" data-action="close-modal">
+            <div class="modal-sheet">
+              <div class="row-between" style="margin-bottom:12px;">
+                <div style="font-size:17px; font-weight:800;">Активация кода</div>
+                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+              </div>
+              <input type="text" id="promo-code" class="input-glass" placeholder="DH-XXXXXXXX-XXXXXXXX" autocomplete="off" />
+              <div id="promo-msg" style="font-size:12px; color:var(--text-secondary); margin:6px 2px 0; display:none;"></div>
+              <button class="btn btn-large btn-accent" id="redeem-btn" data-action="redeem-code-btn" style="margin-top:12px;">
+                <i data-lucide="ticket" style="width:17px; height:17px;"></i>
+                <span>Активировать</span>
               </button>
             </div>
           </div>
