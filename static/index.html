@@ -929,7 +929,9 @@ function lotCategory(title, desc) {
                   </div>
                   <div style="flex:1; min-width:0;">
                     <div style="font-size:13px; font-weight:700;">Подарок может уйти за минуты</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">Если ссылка уже неуспешна (куплё) — лот снят с продажи, это нормально: тарифы считают_today.</div>
+                    <div style="font-size:11px; color:var(--text-secondary);">
+                      ${(() => { const m = String(item.desc).match(/№\s?\d+/); const gnum = m ? m[0].replace(/\s+/g,'') : ''; return (item.seller.name === 'Portals' && gnum) ? `Открой Store Portals и найди ${gnum} в поиске` : 'Если лот уже куплен кем-то — он исчез с маркета, это нормально. Покупай быстро.'; })()}
+                    </div>
                   </div>
                 </div>` : ''}
                 ${item.source === 'TG' ? `
@@ -958,7 +960,7 @@ function lotCategory(title, desc) {
                 ${renderSellerCheck(item.title, item.desc)}
                 <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
                   <i data-lucide="external-link" style="width:17px; height:17px;"></i>
-                  <span>${item.source === 'TG' ? 'Открыть пост в Telegram' : 'Забрать лот на ' + esc(item.source)}</span>
+                  <span>${item.source === 'TG' ? 'Открыть пост в Telegram' : item.source === 'Portals' ? 'Открыть Portals Store' : 'Забрать лот на ' + esc(item.source)}</span>
                 </button>
               </div>
             </div>
