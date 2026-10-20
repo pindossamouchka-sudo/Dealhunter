@@ -44,6 +44,23 @@ DEMAND_WORDS = [
     "порекомендуйте", "ищется", "ищеться",
 ]
 
+# «болтовня/объявления» вместо лотов: приветствия, новости, правила чата
+NOISE_TITLE_WORDS = [
+    "всем привет", "всем внимание", "дорогие друзья", "друзья!", "внимание",
+    "объявление", "правила", "администрация", "напоминаю", "обращаюсь",
+    "по наличию", "спешите", "планируется", "анонс", "опрос", "поздравля",
+]
+
+def _is_noise_title(title: str) -> bool:
+    tl = (title or "").lower()
+    # «всем привет!», «ДОРОГИЕ ДРУЗЬЯ!», «По наличию в России» и т.п.
+    if any(w in tl for w in NOISE_TITLE_WORDS):
+        return True
+    # кончается на «!» и почти без слов — телеграфный заголовок-приветствие
+    if tl.rstrip("!").strip().count(" ") <= 2 and tl.rstrip("!").count("!") >= 1 and len(tl) < 22:
+        return True
+    return False
+
 # пост должен ПОЗВОНИТЬ, что sells: продаю / отдаю / продам / цена ... / есть ...
 SALE_WORDS = [
     "продам", "продаю", "продаётся", "продается", "продажа", "продаж",
@@ -52,6 +69,36 @@ SALE_WORDS = [
     "термин: ", "торг", "цена:", "цена ", "цена -", "по цене",
     "свежий айфон", "новый, гаранти",
 ]
+
+# работа/услуги/подработка — НЕ товарные лоты
+NON_ITEM_WORDS = [
+    "подработк", "работа", "ваканс", "зарплат", "требуются", "требуетс",
+    "услуг", "отзыв", "тестиров", "сервис", "доставка груз", "написан",
+    "решен", "диплом", "курсов", "реферат", "оценк", "занятост", "смена",
+    "сотрудник", "резюме", "фриланс", "заставка", "резюме", "стажировк",
+    "нужны люди", "ищем людей", "набираем", "на полную ставку", "оплата",
+    "опыт", "установ", "настро", "автоматизац", "виндовс", "windows",
+    "регион", "склад", "видеонаблюд",
+]
+
+def _glitch_ratio(text: str) -> float:
+    """доля «космических» букв (стиль спам-обфускации). >15% — спам."""
+    weird = 0
+    letters = 0
+    for ch in text:
+        o = ord(ch)
+        is_normal_letter = (
+            0x0400 <= o <= 0x04FF or  # кириллица
+            0x0041 <= o <= 0x005A or 0x0061 <= o <= 0x007A or  # латиница
+            0x0030 <= o <= 0x0039  # цифры
+        )
+        if ch.isalpha():
+            letters += 1
+            if not is_normal_letter:
+                weird += 1
+    if letters == 0:
+        return 0.0
+    return weird / letters
 
 # минимальные правдоподобные цены (защита от «запчастей» и цен «со скупа»)
 PRICE_FLOORS = {
@@ -97,8 +144,17 @@ def extract_lots(text: str, channel: str, msg_id: int):
         return None
     if any(w in low for w in DEMAND_WORDS):
         return None
-    if not any(w in low for w in SALE_WORDS):
-        # без явного «продаю/отдаю/цена:» — болтовня в чате, не лот
+    has_sale = any(w in low for w in SALE_WORDS)
+    # работа/услуги/подработка — не лоты
+    if any(w in low for w in NON_ITEM_WORDS):
+        return None
+    # обфусцированный («гламурный») текст — уловка спама, не лот
+    if _glitch_ratio(text) > 0.15:
+        return None
+    # шум-заголовок («всем привет», «дорогие друзья», «по наличию») отсекаем только
+    # если в посте нет явного «продаю/цена:» — иначе режем настоящие продажи
+    first_line0 = text.strip().splitlines()[0]
+    if _is_noise_title(re.sub(r"^#\w+\s*", "", first_line0).strip()[:120]) and not has_sale:
         return None
     # берём первую цену-кандидат, которая похожа на правду (иначе пропускаем)
     if not PRICE_RE.search(text):
@@ -117,6 +173,8 @@ def extract_lots(text: str, channel: str, msg_id: int):
     if len(title) < 5:
         title = text.strip()[:100]
     tl = title.lower()
+    if _is_noise_title(title) and not has_sale:
+        return None
     floor = DEFAULT_FLOOR
     for brand, fl in PRICE_FLOORS.items():
         if brand in tl:

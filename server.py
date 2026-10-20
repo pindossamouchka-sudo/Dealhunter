@@ -1675,6 +1675,29 @@ async def api_worker_ingest(lots: List[IngestLot], x_worker_secret: str = Header
     return {"status": "ok", "saved": saved, "skipped": skipped}
 
 
+class PurgeRequest(BaseModel):
+    source: str = "TG"
+    patterns: List[str] = []
+
+
+@app.post("/api/worker/purge")
+async def api_worker_purge(body: PurgeRequest, x_worker_secret: str = Header(default="")):
+    """Удаление мусорных лотов по подстрокам в заголовке (защита: WORKER_SECRET)."""
+    if not WORKER_SECRET or not hmac.compare_digest(x_worker_secret.encode(), WORKER_SECRET.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    pool = require_db()
+    pats = [p.strip() for p in body.patterns if p.strip()][:50]
+    if not pats or body.source not in ("Ozon", "Wildberries", "TG", "GIFTS"):
+        raise HTTPException(status_code=400, detail="bad request")
+    async with pool.acquire() as conn:
+        r = await conn.execute(
+            "DELETE FROM dh_lots WHERE source = $1 AND title ILIKE ANY($2::text[])",
+            body.source, [f"%{p}%" for p in pats],
+        )
+    deleted = int(r.split()[-1]) if r else 0
+    return {"status": "ok", "deleted": deleted}
+
+
 # =====================================================================
 # 9. UI LIQUID GLASS
 # =====================================================================

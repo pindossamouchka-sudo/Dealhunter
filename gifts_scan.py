@@ -11,7 +11,7 @@ gifts_scan — «gift sniper» для DealHunter.
 собранных из трёх маркетов (Tonnel + Portals + Fragment вместе).
 Лот объявляем выгодным, если его цена ≤ (100 - DEAL_PCT)% от медианы
 и выборка по модели достаточно велика (>= MIN_SAMPLES лотов).
-Ссылки — прямые: Tonnel /gift/<id>, Portals t.me/nft/<tg_id>, Fragment /gift/<slug>.
+Ссылки — прямые: Tonnel t.me/tonnel_network_bot/gift?startapp=<id>, Portals Store t.me/portals/market, Fragment /gift/<slug>.
 """
 import os
 import sys
@@ -472,10 +472,15 @@ def lot_url(d: dict) -> str:
     if d["venue"] == "Fragment" and d.get("slug"):
         return f"https://fragment.com/gift/{d['slug']}"
     if d["venue"] == "Tonnel" and d.get("gift_id"):
-        return f"https://market.tonnel.network/gift/{d['gift_id']}"
+        # прямой deep-link на конкретный лот в мини-аппе Tonnel (market.tonnel.network из РФ часто не грузится)
+        return f"https://t.me/tonnel_network_bot/gift?startapp={d['gift_id']}"
+    if d["venue"] == "Portals":
+        # per-item deep link у Portals непубличен — открываем Store мини-аппа,
+        # номер лота (№N) показан в карточке и описании для поиска
+        return "https://t.me/portals/market"
     if d.get("tg_id"):
         return f"https://t.me/nft/{d['tg_id']}"
-    return "https://market.tonnel.network/"
+    return "https://t.me/tonnel_network_bot"
 
 
 def to_lot_dict(d: dict, rate: float) -> dict:
@@ -499,6 +504,11 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         lot_id = f"tonnel-{d.get('gift_id', '') or d.get('gift_num', '')}"
     else:
         lot_id = f"portals-{d.get('tg_id', '') or d.get('gift_num', '')}"
+    extra = ""
+    if d["venue"] == "Portals":
+        extra = f" · покупка: в Store Portals найди №{d.get('gift_num') or ''}"
+    elif d["venue"] == "Tonnel":
+        extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
     return {
         "id": lot_id[:100],
         "title": title[:200],
@@ -514,7 +524,7 @@ def to_lot_dict(d: dict, rate: float) -> dict:
             f"NFT-подарок Telegram · модель {d['model']} · фон {d['backdrop']} · "
             f"символ {d['symbol']} · №{d.get('gift_num') or '—'} · "
             f"цена {d['price_ton']:.2f} TON, медиана рынка {d['fair_ton']:.2f} TON "
-            f"(Tonnel+Portals+Fragment) · скидка ~{pct}% от медианы"
+            f"(Tonnel+Portals+Fragment) · скидка ~{pct}% от медианы{extra}"
         )[:1000],
         "url": lot_url(d),
     }
