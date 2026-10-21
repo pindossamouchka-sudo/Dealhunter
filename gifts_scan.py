@@ -435,6 +435,56 @@ def fragment_fetch(gift_name: str):
 def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
+# ---------------- Сравнение ----------------
+
+# Кэш истории продаж Portals per-SKU: uuid -> (avg_price, ts_cache)
+_PORTALS_SOLD_CACHE = {}
+_POR_SOLD_SAMP = 2   # сколько SKU-касс opting per model спрашивать у Portals
+
+
+def portals_sold_avg(nft_uuid: str) -> float:
+    """Средняя цена РЕАЛЬНЫХ продаж этого SKU на Portals за 30 дней (не листинг)."""
+    if not nft_uuid:
+        return 0.0
+    now = time.time()
+    got = _PORTALS_SOLD_CACHE.get(nft_uuid)
+    if got and now - got[1] < 6 * 3600:
+        return got[0]
+    try:
+        r = requests.get(f"{PORTALS_BASE}/nfts/{nft_uuid}/price/average/detailed",
+                         params={"period": "30 days"}, headers=UA_HEADERS,
+                         impersonate="chrome", timeout=20)
+        if r.status_code == 200:
+            d = r.json()
+            try:
+                avg = float(d.get("avg_price") or 0)
+            except (TypeError, ValueError):
+                avg = 0.0
+            if avg < 0:
+                avg = 0.0
+            _PORTALS_SOLD_CACHE[nft_uuid] = (avg, now)
+            return avg
+    except Exception:
+        pass
+    _PORTALS_SOLD_CACHE[nft_uuid] = (0.0, now)
+    return 0.0
+
+
+def model_sold_fair(mlots) -> tuple:
+    """(avg_ton, n_skus_with_sales) — средняя цена последних реальных продаж модели.
+    Берём Portals: у него есть публичная история сделок /nfts/<uuid>/price/average/detailed."""
+    uuids = [l.get("id") for l in mlots if l.get("venue") == "Portals" and l.get("id")]
+    if not uuids:
+        return 0.0, 0
+    want = max(1, min(_POR_SOLD_SAMP, len(uuids)))
+    picks = random.sample(uuids, want)
+    avs = []
+    for u in picks:
+        a = portals_sold_avg(u)
+        if a > 0:
+            avs.append(a)
+        time.sleep(random.uniform(0.7, 1.4))
+    return (statistics.median(avs), len(avs)) if avs else (0.0, 0)
 
 # ---------------- Сравнение ----------------
 
@@ -457,27 +507,37 @@ def find_with_model_deals(all_lots, rate: float):
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
-            for l in mlots:
-                if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT):
-                    gross_rub = rate * (median - l["price_ton"])
-                    fees_rub = rate * median * RESELL_FEE_PCT / 100.0
-                    net_rub = gross_rub - fees_rub
-                    if net_rub < MIN_NET_RUB:
-                        continue  # мелкие скидки не перекрывают комиссии
-                    rar = parse_model_rarity(model)
-                    deals.append({
-                        "gift": gift, "model": model, "rarity": rar,
-                        "price_ton": l["price_ton"], "fair_ton": median,
-                        "venue": l["venue"], "backdrop": l["backdrop"],
-                        "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
-                        "gift_num": l.get("gift_num", ""),
-                        "tg_id": l.get("tg_id", ""),
-                        "portals_id": l.get("id", ""),
-                        "net_rub": round(net_rub),
-                        "floors": floors,
-                    })
-                else:
-                    break  # отсортировано — дальше дороже
+            # дешёвый прикид по листингам → для кандидатов уточняем реальную цену продаж
+            fair_ton = median
+            fair_src = "листинги"
+            cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT)]
+            if cand_lots:
+                sold_ton, sold_n = model_sold_fair(mlots)
+                if sold_ton > 0:
+                    fair_ton = sold_ton
+                    fair_src = f"продажи Portals ({sold_n})"
+                    cand_lots = [l for l in cand_lots if l["price_ton"] * 100.0 <= fair_ton * (100.0 - DEAL_PCT)]
+            if fair_ton <= 0 or not cand_lots:
+                continue
+            for l in cand_lots:
+                gross_rub = rate * (fair_ton - l["price_ton"])
+                fees_rub = rate * fair_ton * RESELL_FEE_PCT / 100.0
+                net_rub = gross_rub - fees_rub
+                if net_rub < MIN_NET_RUB:
+                    continue  # мелкие скидки не перекрывают комиссии
+                rar = parse_model_rarity(model)
+                deals.append({
+                    "gift": gift, "model": model, "rarity": rar,
+                    "price_ton": l["price_ton"], "fair_ton": fair_ton,
+                    "fair_seconds": fair_src,
+                    "venue": l["venue"], "backdrop": l["backdrop"],
+                    "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
+                    "gift_num": l.get("gift_num", ""),
+                    "tg_id": l.get("tg_id", ""),
+                    "portals_id": l.get("id", ""),
+                    "net_rub": round(net_rub),
+                    "floors": floors,
+                })
     return deals
 
 
@@ -540,8 +600,9 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         "description": (
             f"NFT-подарок Telegram · модель {d['model']} · фон {d['backdrop']} · "
             f"символ {d['symbol']} · №{d.get('gift_num') or '—'} · "
-            f"цена {d['price_ton']:.2f} TON, медиана рынка {d['fair_ton']:.2f} TON "
-            f"(Tonnel+Portals+Fragment) · скидка ~{pct}% от медианы{extra}"
+            f"цена {d['price_ton']:.2f} TON, рыночная цена {d['fair_ton']:.2f} TON "
+            f"(источник: {d.get('fair_seconds') or 'листинги'}; Tonnel+Portals+Fragment)"
+            f" · скидка ~{pct}%{extra}"
         )[:1000],
         "url": lot_url(d),
     }
