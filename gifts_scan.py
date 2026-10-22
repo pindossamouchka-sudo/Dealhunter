@@ -1,17 +1,17 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-gifts_scan вЂ” В«gift sniperВ» РґР»СЏ DealHunter.
+gifts_scan — «gift sniper» для DealHunter.
 
-РњРѕРЅРёС‚РѕСЂРёРј NFT-РїРѕРґР°СЂРєРё Telegram СЃСЂР°Р·Сѓ РЅР° С‚СЂС‘С… РјР°СЂРєРµС‚Р°С…:
-  вЂў Tonnel   (market.tonnel.network) вЂ” gifts2.tonnel.network/api/pageGifts
-  вЂў Portals  (portal-market.com)     вЂ” РїРѕСЂС‚Р°Р»РѕРІСЃРєРёР№ REST
-  вЂў Fragment (fragment.com)          вЂ” РєР°С‚Р°Р»РѕРі Р±РµР· РєРѕС€РµР»СЊРєР° + HTML РєР°СЂС‚РѕС‡РµРє
+Мониторим NFT-подарки Telegram сразу на трёх маркетах:
+  • Tonnel   (market.tonnel.network) — gifts2.tonnel.network/api/pageGifts
+  • Portals  (portal-market.com)     — порталовский REST
+  • Fragment (fragment.com)          — каталог без кошелька + HTML карточек
 
-Р§РµСЃС‚РЅР°СЏ В«СЂС‹РЅРѕС‡РЅР°СЏ РїР»Р°РЅРєР°В» = РњР•Р”РРђРќРђ С†РµРЅ РІСЃРµС… С‚РµРєСѓС‰РёС… Р»РёСЃС‚РёРЅРіРѕРІ РјРѕРґРµР»Рё,
-СЃРѕР±СЂР°РЅРЅС‹С… РёР· С‚СЂС‘С… РјР°СЂРєРµС‚РѕРІ (Tonnel + Portals + Fragment РІРјРµСЃС‚Рµ).
-Р›РѕС‚ РѕР±СЉСЏРІР»СЏРµРј РІС‹РіРѕРґРЅС‹Рј, РµСЃР»Рё РµРіРѕ С†РµРЅР° в‰¤ (100 - DEAL_PCT)% РѕС‚ РјРµРґРёР°РЅС‹
-Рё РІС‹Р±РѕСЂРєР° РїРѕ РјРѕРґРµР»Рё РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ РІРµР»РёРєР° (>= MIN_SAMPLES Р»РѕС‚РѕРІ).
-РЎСЃС‹Р»РєРё вЂ” РїСЂСЏРјС‹Рµ: Tonnel t.me/tonnel_network_bot/gift?startapp=<id>, Portals Store t.me/portals/market, Fragment /gift/<slug>.
+Честная «рыночная планка» = МЕДИАНА цен всех текущих листингов модели,
+собранных из трёх маркетов (Tonnel + Portals + Fragment вместе).
+Лот объявляем выгодным, если его цена ≤ (100 - DEAL_PCT)% от медианы
+и выборка по модели достаточно велика (>= MIN_SAMPLES лотов).
+Ссылки — прямые: Tonnel t.me/tonnel_network_bot/gift?startapp=<id>, Portals Store t.me/portals/market, Fragment /gift/<slug>.
 """
 import os
 import sys
@@ -52,24 +52,24 @@ TONNEL_HEADERS = {
 }
 PORTALS_BASE = "https://portal-market.com/api"
 
-# РџРµР№РґР¶РёРЅРі РїРѕ РєР°Р¶РґРѕРјСѓ РјР°СЂРєРµС‚Сѓ: 3 СЃС‚СЂР°РЅРёС†С‹ Г— limit = СЃРєРѕР»СЊРєРѕ Р»РёСЃС‚РёРЅРіРѕРІ С‡РёС‚Р°РµРј
+# Пейджинг по каждому маркету: 3 страницы × limit = сколько листингов читаем
 TONNEL_PAGES = 3
-TONNEL_LIMIT = 30       # СЃРµСЂРІРµСЂ Tonnel РЅРµ РїСЂРёРЅРёРјР°РµС‚ limit > 30
+TONNEL_LIMIT = 30       # сервер Tonnel не принимает limit > 30
 PORTALS_PAGES = 3
 PORTALS_LIMIT = 30
 
-# РџРѕСЂРѕРі В«РІС‹РіРѕРґРЅРѕСЃС‚РёВ»: С†РµРЅР° в‰¤ РјРµРґРёР°РЅС‹ РјРёРЅСѓСЃ DEAL_PCT%
-# 18% вЂ” С‡С‚РѕР±С‹ РїРѕСЃР»Рµ РєРѕРјРёСЃСЃРёР№ РїРµСЂРµРїСЂРѕРґР°Р¶Рё (~8%) СЃРґРµР»РєР° РѕСЃС‚Р°РІР°Р»Р°СЃСЊ РІ РїР»СЋСЃРµ
+# Порог «выгодности»: цена ≤ медианы минус DEAL_PCT%
+# 18% — чтобы после комиссий перепродажи (~8%) сделка оставалась в плюсе
 DEAL_PCT = 18.0
-# РћС†РµРЅРєР° РєРѕРјРёСЃСЃРёР№ РїСЂРё РїРµСЂРµРїСЂРѕРґР°Р¶Рµ (РґРѕР»СЏ РѕС‚ С†РµРЅС‹ РїСЂРѕРґР°Р¶Рё)
+# Оценка комиссий при перепродаже (доля от цены продажи)
 RESELL_FEE_PCT = 8.0
-# РњРёРЅРёРјР°Р»СЊРЅР°СЏ С‡РёСЃС‚Р°СЏ РїСЂРёР±С‹Р»СЊ РІ в‚Ѕ РїРѕСЃР»Рµ РІС‹С‡РµС‚Р° РєРѕРјРёСЃСЃРёР№
+# Минимальная чистая прибыль в ₽ после вычета комиссий
 MIN_NET_RUB = 1500
-# РњРёРЅРёРјР°Р»СЊРЅРѕРµ С‡РёСЃР»Рѕ Р»РёСЃС‚РёРЅРіРѕРІ РІ РІС‹Р±РѕСЂРєРµ РјРѕРґРµР»Рё, С‡С‚РѕР±С‹ РµР№ РІРµСЂРёС‚СЊ
+# Минимальное число листингов в выборке модели, чтобы ей верить
 MIN_SAMPLES = 5
-# РђРЅС‚РёР±РѕС‚-РїР°СѓР·Р° РјРµР¶РґСѓ Р·Р°РїСЂРѕСЃР°РјРё
+# Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
-# РЎРєРѕР»СЊРєРѕ РґРµС€С‘РІС‹С… Р»РѕС‚РѕРІ Fragment РѕС‚РєСЂС‹РІР°РµРј РїРѕ-РґРµС‚Р°Р»СЊРЅРѕ (С‡С‚РѕР±С‹ СѓР·РЅР°С‚СЊ РјРѕРґРµР»СЊ)
+# Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
 FRAGMENT_TOP = 2
 
 DEFAULT_WATCHLIST = [
@@ -150,10 +150,10 @@ def tonnel_fetch_pages(gift_name: str):
             r = requests.post(TONNEL_API, data=json.dumps(jd), headers=TONNEL_HEADERS,
                               impersonate="chrome", timeout=30)
         except Exception as e:
-            print(f"  [!] Tonnel СЃРµС‚СЊ {gift_name} p{page}: {type(e).__name__}")
+            print(f"  [!] Tonnel сеть {gift_name} p{page}: {type(e).__name__}")
             break
         if r.status_code != 200:
-            print(f"  [!] Tonnel HTTP {r.status_code} РЅР° {gift_name} p{page}")
+            print(f"  [!] Tonnel HTTP {r.status_code} на {gift_name} p{page}")
             time.sleep(random.uniform(40.0, 65.0))
             break
         try:
@@ -170,7 +170,7 @@ def tonnel_fetch_pages(gift_name: str):
             if it.get("status") not in (None, "forsale"):
                 continue
             model = (it.get("model") or "").strip()
-            if not model or model == "вЂ”":
+            if not model or model == "—":
                 continue
             rar = parse_model_rarity(model)
             model_base = re.sub(r"\s*\([\d.,]+%\)", "", model).strip()
@@ -180,8 +180,8 @@ def tonnel_fetch_pages(gift_name: str):
                 "price_ton": float(price),
                 "model": model_base,
                 "rarity": rar,
-                "backdrop": it.get("backdrop") or "вЂ”",
-                "symbol": it.get("symbol") or "вЂ”",
+                "backdrop": it.get("backdrop") or "—",
+                "symbol": it.get("symbol") or "—",
                 "gift_id": it.get("gift_id") or "",
                 "gift_num": it.get("gift_num") or "",
                 "venue": "Tonnel",
@@ -207,7 +207,7 @@ _portals_all = None
 
 
 def portals_all_collections():
-    """РћРґРёРЅ СЂР°Р· С‚СЏРЅРµРј РІРµСЃСЊ СЃРїРёСЃРѕРє РєРѕР»Р»РµРєС†РёР№ Portals (~123 С€С‚) Рё РєРµС€РёСЂСѓРµРј."""
+    """Один раз тянем весь список коллекций Portals (~123 шт) и кешируем."""
     global _portals_all
     if _portals_all is not None:
         return _portals_all
@@ -218,7 +218,7 @@ def portals_all_collections():
             _portals_all = r.json().get("collections", [])
             return _portals_all
     except Exception as e:
-        print(f"  [!] Portals СЃРїРёСЃРѕРє РєРѕР»Р»РµРєС†РёР№: {type(e).__name__}")
+        print(f"  [!] Portals список коллекций: {type(e).__name__}")
     _portals_all = []
     return _portals_all
 
@@ -238,7 +238,7 @@ def portals_collection_id(gift_name: str):
         if chosen:
             break
     if not chosen:
-        print(f"  [i] Portals: РєРѕР»Р»РµРєС†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°: {gift_name}")
+        print(f"  [i] Portals: коллекция не найдена: {gift_name}")
         return None
     _portals_coll_cache[gift_name] = (chosen.get("id"), chosen)
     return (chosen.get("id"), chosen)
@@ -248,7 +248,7 @@ def portals_fetch_pages(gift_name: str):
     """list[dict]: {price_ton, model, backdrop, symbol, tg_id}"""
     got = portals_collection_id(gift_name)
     if not got:
-        print(f"  [i] Portals: РєРѕР»Р»РµРєС†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°: {gift_name}")
+        print(f"  [i] Portals: коллекция не найдена: {gift_name}")
         return [], 0
     cid, coll = got
     out, pages_ok = [], 0
@@ -263,10 +263,10 @@ def portals_fetch_pages(gift_name: str):
             r = requests.get(f"{PORTALS_BASE}/nfts/search", params=params,
                              headers=UA_HEADERS, impersonate="chrome", timeout=30)
         except Exception as e:
-            print(f"  [!] Portals СЃРµС‚СЊ {gift_name} p{p + 1}: {type(e).__name__}")
+            print(f"  [!] Portals сеть {gift_name} p{p + 1}: {type(e).__name__}")
             break
         if r.status_code != 200:
-            print(f"  [!] Portals HTTP {r.status_code} РЅР° {gift_name} p{p + 1}")
+            print(f"  [!] Portals HTTP {r.status_code} на {gift_name} p{p + 1}")
             break
         try:
             results = r.json().get("results", [])
@@ -290,11 +290,11 @@ def portals_fetch_pages(gift_name: str):
             out.append({
                 "price_ton": price,
                 "model": m["value"],
-                "backdrop": (attrs.get("backdrop") or {}).get("value", "вЂ”"),
-                "symbol": (attrs.get("symbol") or {}).get("value", "вЂ”"),
+                "backdrop": (attrs.get("backdrop") or {}).get("value", "—"),
+                "symbol": (attrs.get("symbol") or {}).get("value", "—"),
                 "rarity": rarity,
                 "tg_id": it.get("tg_id") or "",
-                "id": it.get("id") or "",   # UUID РґР»СЏ deep-link Portals
+                "id": it.get("id") or "",   # UUID для deep-link Portals
                 "venue": "Portals",
             })
             if len(out) >= 90:
@@ -316,14 +316,14 @@ def parse_model_rarity(model: str) -> float:
 # ---------------- Fragment ----------------
 
 _FRAGMENT_FIX = {
-    # watchlist-РёРјСЏ (norm) -> fragment-slug, РіРґРµ Р°РІС‚РѕРјР°С‚РёРєР° РЅРµ СЃРїСЂР°РІР»СЏРµС‚СЃСЏ
+    # watchlist-имя (norm) -> fragment-slug, где автоматика не справляется
 }
 
 _fragment_slugs = None
 
 
 def fragment_slugs():
-    """{norm_РёРјРµРЅРё_РєРѕР»Р»РµРєС†РёРё: fragment_slug} вЂ” С‚СЏРЅРµРј РѕРґРёРЅ СЂР°Р· Р·Р° РїСЂРѕРіРѕРЅ."""
+    """{norm_имени_коллекции: fragment_slug} — тянем один раз за прогон."""
     global _fragment_slugs
     if _fragment_slugs is not None:
         return _fragment_slugs
@@ -339,7 +339,7 @@ def fragment_slugs():
             nm = _norm(c.get("name") or "")
             if slug:
                 out.setdefault(nm, slug)
-        # РЅР° Fragment РєРѕР»Р»РµРєС†РёРё РІРѕ РјРЅРѕР¶. С‡РёСЃР»Рµ: СЃРЅРёРјРµРј 's' Рё РЅР°РѕР±РѕСЂРѕС‚
+        # на Fragment коллекции во множ. числе: снимем 's' и наоборот
         for nm, slug in list(out.items()):
             if nm:
                 out.setdefault(nm + "s", slug)
@@ -351,13 +351,13 @@ def fragment_slugs():
         _fragment_slugs = out
         return out
     except Exception as e:
-        print(f"  [!] Fragment РєР°С‚Р°Р»РѕРі: {type(e).__name__} {e}")
+        print(f"  [!] Fragment каталог: {type(e).__name__} {e}")
         _fragment_slugs = {}
         return {}
 
 
 def fragment_gift_page_attrs(slug: str):
-    """(model, backdrop, symbol) вЂ” РїР°СЂСЃРёРј HTML РєР°СЂС‚РѕС‡РєРё Fragment."""
+    """(model, backdrop, symbol) — парсим HTML карточки Fragment."""
     try:
         r = requests.get(f"https://fragment.com/gift/{slug}",
                          headers=UA_HEADERS, impersonate="chrome", timeout=40)
@@ -375,12 +375,12 @@ def fragment_gift_page_attrs(slug: str):
 
 
 def fragment_fetch(gift_name: str):
-    """list[dict] lot-РѕРІ Fragment РґР»СЏ РѕРґРЅРѕР№ РєРѕР»Р»РµРєС†РёРё (РґРµС€С‘РІС‹Рµ СЃРІРµСЂС…Сѓ)."""
+    """list[dict] lot-ов Fragment для одной коллекции (дешёвые сверху)."""
     slugs = fragment_slugs()
     want = _norm(gift_name)
     slug = slugs.get(want) or _FRAGMENT_FIX.get(want)
     if not slug:
-        print(f"  [i] Fragment: РєРѕР»Р»РµРєС†РёСЏ РЅРµ РЅР°Р№РґРµРЅР°: {gift_name}")
+        print(f"  [i] Fragment: коллекция не найдена: {gift_name}")
         return []
     try:
         import asyncio
@@ -408,22 +408,22 @@ def fragment_fetch(gift_name: str):
             time.sleep(random.uniform(1.0, 2.0))
             if attrs and attrs.get("Model"):
                 (mv, mr) = attrs["Model"]
-                (bv, _br) = attrs.get("Backdrop", ("вЂ”", 0))
-                (sv, _sr) = attrs.get("Symbol", ("вЂ”", 0))
+                (bv, _br) = attrs.get("Backdrop", ("—", 0))
+                (sv, _sr) = attrs.get("Symbol", ("—", 0))
                 attrs_by_slug[fslug] = (mv, bv, sv, mr)
                 top += 1
             else:
-                # РєР°СЂС‚РѕС‡РєР° РЅРµ РѕС‚РєСЂС‹Р»Р°СЃСЊ вЂ” РЅРµ Р±РµСЃРєРѕРЅРµС‡РЅРѕ СЂРІС‘РјСЃСЏ, РїСЂРѕР±СѓРµРј СЃР»РµРґСѓСЋС‰СѓСЋ
+                # карточка не открылась — не бесконечно рвёмся, пробуем следующую
                 continue
         if fslug not in attrs_by_slug:
-            # Р·РЅР°РµРј С‚РѕР»СЊРєРѕ С†РµРЅСѓ вЂ” РјРѕРґРµР»СЊ РЅРµРёР·РІРµСЃС‚РЅР°, РІ РјРµРґРёР°РЅСѓ РЅРµ РїРѕР№РґС‘С‚, РёРґС‘Рј РјРёРјРѕ
+            # знаем только цену — модель неизвестна, в медиану не пойдёт, идём мимо
             continue
         mv, bv, sv, mr = attrs_by_slug[fslug]
         out.append({
             "price_ton": price,
             "model": mv,
-            "backdrop": bv or "вЂ”",
-            "symbol": sv or "вЂ”",
+            "backdrop": bv or "—",
+            "symbol": sv or "—",
             "rarity": mr,
             "gift_num": it.get("number") or "",
             "venue": "Fragment",
@@ -435,16 +435,16 @@ def fragment_fetch(gift_name: str):
 def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
-# ---------------- РЎСЂР°РІРЅРµРЅРёРµ ----------------
+# ---------------- Сравнение ----------------
 
-# РљСЌС€ РёСЃС‚РѕСЂРёРё РїСЂРѕРґР°Р¶ Portals per-SKU: uuid -> (avg_price, ts_cache)
+# Кэш истории продаж Portals per-SKU: uuid -> (avg_price, ts_cache)
 _PORTALS_SOLD_CACHE = {}
-_POR_SOLD_SAMP = 2   # СЃРєРѕР»СЊРєРѕ SKU-РєР°СЃСЃ opting per model СЃРїСЂР°С€РёРІР°С‚СЊ Сѓ Portals
+_POR_SOLD_SAMP = 2   # сколько SKU-касс opting per model спрашивать у Portals
 
 
 def portals_sold_avg(nft_uuid: str) -> float:
-    """РЎСЂРµРґРЅСЏСЏ С†РµРЅР° Р Р•РђР›Р¬РќР«РҐ РїСЂРѕРґР°Р¶ СЌС‚РѕРіРѕ SKU РЅР° Portals.
-    РЎРЅР°С‡Р°Р»Р° РїСЂРѕР±СѓРµРј СЃРІРµР¶РёРµ 7 РґРЅРµР№ (Р°РєС‚СѓР°Р»СЊРЅР°СЏ РїР»Р°РЅРєР°), РµСЃР»Рё РїСЂРѕРґР°Р¶ РЅРµС‚ вЂ” 30 РґРЅРµР№."""
+    """Средняя цена РЕАЛЬНЫХ продаж этого SKU на Portals.
+    Сначала пробуем свежие 7 дней (актуальная планка), если продаж нет — 30 дней."""
     if not nft_uuid:
         return 0.0
     now = time.time()
@@ -473,12 +473,10 @@ def portals_sold_avg(nft_uuid: str) -> float:
 
 
 def model_sold_fair(mlots, listing_median: float) -> tuple:
-    """(avg_ton, n_skus_with_sales) вЂ” РїР»Р°РЅРєР° РїРѕ СЂРµР°Р»СЊРЅС‹Рј РїСЂРѕРґР°Р¶Р°Рј РјРѕРґРµР»Рё.
-    РџСЂР°РІРёР»Р° РїСЂРѕС‚РёРІ В«РјРёРЅСѓСЃР°В»:
-      вЂў С‚СЂРµР±СѓРµРј РґР°РЅРЅС‹Рµ РјРёРЅРёРјСѓРј СЃ 2 СЂР°Р·РЅС‹С… SKU (РѕРґРЅР° РїСЂРѕРґР°Р¶Р° РѕРґРЅРѕРіРѕ SKU вЂ” С€СѓРј);
-      вЂў РїР»Р°РЅРєР° РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РЅРёР¶Рµ РґРµС€С‘РІС‹С… Р»РёСЃС‚РёРЅРіРѕРІ РјРѕРґРµР»Рё*0.9 вЂ” РёРЅР°С‡Рµ РґРµР»Р°РµРј РІС‹РІРѕРґ,
-        С‡С‚Рѕ РїСЂРѕРґР°РІР°Р»Рё В«РІ РЅРѕР»СЊВ», Рё СЌС‚Рѕ С‚РѕР¶Рµ СѓРєР°Р·Р°С‚РµР»СЊ РЅР° С‚РµРєСѓС‰СѓСЋ С†РµРЅСѓ РїСЂРѕРґР°Р¶Рё;
-      вЂў РїР»Р°РЅРєР° РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РІС‹С€Рµ РґРѕСЂРѕРіРёС… Р»РёСЃС‚РёРЅРіРѕРІ*2 (СѓСЃС‚Р°СЂРµРІС€РёР№ avg)."""
+    """(avg_ton, n_skus_with_sales) — планка по реальным продажам точной модели (одинаковый фон).
+    Правила против «минуса»:
+      • требуем данные минимум с 2 разных SKU (одна продажа одного SKU — шум);
+      • avg выше медианы листингов*2 — планка устарела, не верим ей."""
     uuids = [l.get("id") for l in mlots if l.get("venue") == "Portals" and l.get("id")]
     if not uuids or len(uuids) < 2:
         return 0.0, 0
@@ -493,24 +491,23 @@ def model_sold_fair(mlots, listing_median: float) -> tuple:
     if len(avs) < 2:
         return 0.0, 0
     avg = statistics.median(avs)
-    if listing_median > 0:
-        # Р·Р°С‰РёС‚Р° РѕС‚ СѓСЃС‚Р°СЂРµРІС€РµРіРѕ avg: СЃС‚СЂР°РЅРёС†С‹ Р»РёСЃС‚РёРЅРіРѕРІ РѕС‚СЂР°Р¶Р°СЋС‚ С‚РµРєСѓС‰СѓСЋ С†РµРЅСѓ
-        if avg > listing_median * 2.0:
-            return 0.0, 0
-        avg = max(avg, listing_median * 0.80)
+    if listing_median > 0 and avg > listing_median * 2.0:
+        return 0.0, 0
     return avg, len(avs)
 
-# ---------------- РЎСЂР°РІРЅРµРЅРёРµ ----------------
+# ---------------- Сравнение ----------------
 
 def find_with_model_deals(all_lots, rate: float):
     """list[lot]: {venue, gift, model, rarity, backdrop, symbol, price_ton, fair_ton, gift_id, tg_id, gift_num}"""
     st = load_state()
     deals = []
     for gift, lots in all_lots.items():
+        # сравниваем ТОЛЬКО одинаковые модели с одинаковым фоном:
+        # обычный фон и редкий стоят по-разному, сваливать нельзя
         by_model = {}
         for l in lots:
-            by_model.setdefault(l["model"], []).append(l)
-        for model, mlots in by_model.items():
+            by_model.setdefault((l["model"], l["backdrop"]), []).append(l)
+        for (model, backdrop), mlots in by_model.items():
             if len(mlots) < MIN_SAMPLES:
                 continue
             prices = [l["price_ton"] for l in mlots]
@@ -521,15 +518,17 @@ def find_with_model_deals(all_lots, rate: float):
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
-            # РґРµС€С‘РІС‹Р№ РїСЂРёРєРёРґ РїРѕ Р»РёСЃС‚РёРЅРіР°Рј в†’ РґР»СЏ РєР°РЅРґРёРґР°С‚РѕРІ СѓС‚РѕС‡РЅСЏРµРј СЂРµР°Р»СЊРЅСѓСЋ С†РµРЅСѓ РїСЂРѕРґР°Р¶
+            # дешёвый прикид по листингам → для кандидатов уточняем реальную цену продаж;
+            # планка = МЕНЬШЕЕ из (продажи, медиана листингов):
+            # продать дороже текущих предложений нельзя, значит планка по минимальному
             fair_ton = median
-            fair_src = "Р»РёСЃС‚РёРЅРіРё"
+            fair_src = "листинги"
             cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT)]
             if cand_lots:
                 sold_ton, sold_n = model_sold_fair(mlots, median)
                 if sold_ton > 0:
-                    fair_ton = sold_ton
-                    fair_src = f"РїСЂРѕРґР°Р¶Рё Portals ({sold_n})"
+                    fair_ton = min(sold_ton, median)
+                    fair_src = f"продажи Portals ({sold_n})"
                     cand_lots = [l for l in cand_lots if l["price_ton"] * 100.0 <= fair_ton * (100.0 - DEAL_PCT)]
             if fair_ton <= 0 or not cand_lots:
                 continue
@@ -538,7 +537,7 @@ def find_with_model_deals(all_lots, rate: float):
                 fees_rub = rate * fair_ton * RESELL_FEE_PCT / 100.0
                 net_rub = gross_rub - fees_rub
                 if net_rub < MIN_NET_RUB:
-                    continue  # РјРµР»РєРёРµ СЃРєРёРґРєРё РЅРµ РїРµСЂРµРєСЂС‹РІР°СЋС‚ РєРѕРјРёСЃСЃРёРё
+                    continue  # мелкие скидки не перекрывают комиссии
                 rar = parse_model_rarity(model)
                 deals.append({
                     "gift": gift, "model": model, "rarity": rar,
@@ -559,10 +558,10 @@ def lot_url(d: dict) -> str:
     if d["venue"] == "Fragment" and d.get("slug"):
         return f"https://fragment.com/gift/{d['slug']}"
     if d["venue"] == "Tonnel" and d.get("gift_id"):
-        # РїСЂСЏРјРѕР№ deep-link РЅР° РєРѕРЅРєСЂРµС‚РЅС‹Р№ Р»РѕС‚ РІ РјРёРЅРё-Р°РїРїРµ Tonnel (market.tonnel.network РёР· Р Р¤ С‡Р°СЃС‚Рѕ РЅРµ РіСЂСѓР·РёС‚СЃСЏ)
+        # прямой deep-link на конкретный лот в мини-аппе Tonnel (market.tonnel.network из РФ часто не грузится)
         return f"https://t.me/tonnel_network_bot/gift?startapp={d['gift_id']}"
     if d["venue"] == "Portals":
-        # deep-link РёР· СЃР°РјРѕРіРѕ РєР»РёРµРЅС‚Р° Portals: Р±РѕС‚ @portals_market_bot, /market?startapp=gift_<uuid>
+        # deep-link из самого клиента Portals: бот @portals_market_bot, /market?startapp=gift_<uuid>
         uid = d.get("portals_id") or ""
         if uid:
             return f"https://t.me/portals_market_bot/market?startapp=gift_{uid}"
@@ -582,9 +581,9 @@ def to_lot_dict(d: dict, rate: float) -> dict:
     profit = market_rub - price_rub
     pct = int(round(profit * 100 / market_rub))
     rar_txt = f" ({clean_rarity(d.get('rarity', 0))}%)" if d.get("rarity") else ""
-    title = f"{d['gift']} вЂ” {d['model']}{rar_txt}"
-    tags = ["РџРѕРґР°СЂРѕРє", d["gift"], d["model"], d["venue"]]
-    if d.get("backdrop") and d["backdrop"] != "вЂ”":
+    title = f"{d['gift']} — {d['model']}{rar_txt}"
+    tags = ["Подарок", d["gift"], d["model"], d["venue"]]
+    if d.get("backdrop") and d["backdrop"] != "—":
         tags.append(d["backdrop"])
     tags = tags[:8]
     if d["venue"] == "Fragment":
@@ -595,16 +594,16 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         lot_id = f"portals-{d.get('tg_id', '') or d.get('gift_num', '')}"
     extra = ""
     if d["venue"] == "Portals":
-        extra = " В· РїРѕРєСѓРїРєР°: РєРЅРѕРїРєР° В«Р—Р°Р±СЂР°С‚СЊВ» РѕС‚РєСЂС‹РІР°РµС‚ Р»РѕС‚ РїСЂСЏРјРѕ РІ Portals"
+        extra = " · покупка: кнопка «Забрать» открывает лот прямо в Portals"
     elif d["venue"] == "Tonnel":
-        extra = " В· РїРѕРєСѓРїРєР°: РєРЅРѕРїРєР° В«Р—Р°Р±СЂР°С‚СЊВ» РѕС‚РєСЂС‹РІР°РµС‚ Р»РѕС‚ РІ Р±РѕС‚Рµ Tonnel"
+        extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
     if d.get("net_rub"):
-        extra += f" В· С‡РёСЃС‚С‹РјРё ~{d['net_rub']:,} в‚Ѕ РїРѕСЃР»Рµ РєРѕРјРёСЃСЃРёР№".replace(",", " ")
+        extra += f" · чистыми ~{d['net_rub']:,} ₽ после комиссий".replace(",", " ")
     return {
         "id": lot_id[:100],
         "title": title[:200],
         "source": "GIFTS",
-        "city": "Р’СЃСЏ Р Р¤",
+        "city": "Вся РФ",
         "price": price_rub,
         "market": market_rub,
         "tags": tags,
@@ -612,11 +611,11 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         "sellerRating": 4.8,
         "sellerReviews": 0,
         "description": (
-            f"NFT-РїРѕРґР°СЂРѕРє Telegram В· РјРѕРґРµР»СЊ {d['model']} В· С„РѕРЅ {d['backdrop']} В· "
-            f"СЃРёРјРІРѕР» {d['symbol']} В· в„–{d.get('gift_num') or 'вЂ”'} В· "
-            f"С†РµРЅР° {d['price_ton']:.2f} TON, СЂС‹РЅРѕС‡РЅР°СЏ С†РµРЅР° {d['fair_ton']:.2f} TON "
-            f"(РёСЃС‚РѕС‡РЅРёРє: {d.get('fair_src') or 'Р»РёСЃС‚РёРЅРіРё'}; Tonnel+Portals+Fragment)"
-            f" В· СЃРєРёРґРєР° ~{pct}%{extra}"
+            f"NFT-подарок Telegram · модель {d['model']} · фон {d['backdrop']} · "
+            f"символ {d['symbol']} · №{d.get('gift_num') or '—'} · "
+            f"цена {d['price_ton']:.2f} TON, рыночная цена {d['fair_ton']:.2f} TON "
+            f"(источник: {d.get('fair_src') or 'листинги'}; Tonnel+Portals+Fragment)"
+            f" · скидка ~{pct}%{extra}"
         )[:1000],
         "url": lot_url(d),
     }
@@ -626,7 +625,7 @@ def push_to_server(lots: list) -> tuple:
     if not lots:
         return 0, 0
     if not WORKER_SECRET:
-        print("[!] WORKER_SECRET РїСѓСЃС‚РѕР№ РІ .env вЂ” РїСѓС€ РЅРµРІРѕР·РјРѕР¶РµРЅ")
+        print("[!] WORKER_SECRET пустой в .env — пуш невозможен")
         return 0, len(lots)
     import httpx
     try:
@@ -638,15 +637,15 @@ def push_to_server(lots: list) -> tuple:
         if r.status_code == 200:
             d = r.json()
             return d.get("saved", 0), d.get("skipped", 0)
-        print(f"[!] СЃРµСЂРІРµСЂ {r.status_code}: {r.text[:200]}")
+        print(f"[!] сервер {r.status_code}: {r.text[:200]}")
         return 0, len(lots)
     except Exception as e:
-        print(f"[!] СЃРµСЂРІРµСЂ РЅРµРґРѕСЃС‚СѓРїРµРЅ: {e}")
+        print(f"[!] сервер недоступен: {e}")
         return 0, len(lots)
 
 
 def ping_server():
-    """Р”РµСЂР¶РёРј СЃРµСЂРІРµСЂ С‚С‘РїР»С‹Рј (Render free Р·Р°СЃС‹РїР°РµС‚ Р±РµР· HTTP-Р·Р°РїСЂРѕСЃРѕРІ)."""
+    """Держим сервер тёплым (Render free засыпает без HTTP-запросов)."""
     import httpx
     try:
         httpx.get(f"{SERVER_URL}/health", timeout=20)
@@ -657,9 +656,9 @@ def ping_server():
 def main():
     ping_server()
     watchlist = load_watchlist()
-    print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan СЃС‚Р°СЂС‚: РєРѕР»Р»РµРєС†РёР№ {len(watchlist)}")
+    print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan старт: коллекций {len(watchlist)}")
     rate = ton_rub_rate()
-    print(f"РєСѓСЂСЃ TON: {rate:.1f} в‚Ѕ")
+    print(f"курс TON: {rate:.1f} ₽")
     all_lots = {}
     ok = []
     for gift in watchlist:
@@ -675,9 +674,9 @@ def main():
         venue_p = len(p_lots)
         venue_f = len(f_lots)
         ok.append((gift, len(total), venue_t, venue_p))
-        print(f"  {gift}: {len(total)} Р»РѕС‚РѕРІ (Tonnel {venue_t} / Portals {venue_p} / Fragment {venue_f})")
+        print(f"  {gift}: {len(total)} лотов (Tonnel {venue_t} / Portals {venue_p} / Fragment {venue_f})")
     deals = find_with_model_deals(all_lots, rate)
-    # Р·Р° РїСЂРѕРіРѕРЅ РЅРµ СЃРїР°РјРёРј Р»РµРЅС‚Сѓ: С‚РѕРї-20 РїРѕ СЂР°Р·РјРµСЂСѓ СЃРєРёРґРєРё, СѓРЅРёРєР°Р»СЊРЅРѕ РїРѕ (gift|model|venue)
+    # за прогон не спамим ленту: топ-20 по размеру скидки, уникально по (gift|model|venue)
     deals.sort(key=lambda d: 1 - d["price_ton"] / d["fair_ton"])
     seen = set()
     uniq = []
@@ -688,13 +687,13 @@ def main():
         seen.add(k)
         uniq.append(d)
     deals = uniq[:20]
-    print(f"РІС‹РіРѕРґРЅС‹С…: {len(deals)}")
+    print(f"выгодных: {len(deals)}")
     lots = [to_lot_dict(d, rate) for d in deals]
     if "--no-push" not in sys.argv:
         saved, skipped = push_to_server(lots)
-        print(f"РїСѓС€: saved={saved} skipped={skipped}")
+        print(f"пуш: saved={saved} skipped={skipped}")
     else:
-        print(f"РїСѓС€: off (--no-push), Р»РѕС‚РѕРІ Рє РїСѓС€Сѓ: {len(lots)}")
+        print(f"пуш: off (--no-push), лотов к пушу: {len(lots)}")
 
 
 if __name__ == "__main__":
