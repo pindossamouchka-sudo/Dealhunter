@@ -62,7 +62,7 @@ PORTALS_LIMIT = 30
 # 18% — чтобы после комиссий перепродажи (~8%) сделка оставалась в плюсе
 DEAL_PCT = 12.0
 # Оценка комиссий при перепродаже (доля от цены продажи)
-RESELL_FEE_PCT = 8.0
+RESELL_FEE_PCT = 10.0
 # Минимальная чистая прибыль в ₽ после вычета комиссий
 MIN_NET_RUB = 500
 # Минимальное число листингов в выборке модели, чтобы ей верить
@@ -139,7 +139,7 @@ def tonnel_fetch_pages(gift_name: str):
         "export_at": {"$exists": True},
         "gift_name": gift_name,
     }
-    out, pages_ok = [], 0
+    out, pages_ok, complete_t = [], 0, False
     for page in range(1, TONNEL_PAGES + 1):
         jd = {
             "page": page, "limit": TONNEL_LIMIT, "sort": sort,
@@ -158,6 +158,7 @@ def tonnel_fetch_pages(gift_name: str):
             break
         try:
             items = r.json()
+            complete_t = True
         except Exception:
             break
         if not isinstance(items, list) or not items:
@@ -189,9 +190,10 @@ def tonnel_fetch_pages(gift_name: str):
             if len(out) >= 90:
                 break
         if len(items) < TONNEL_LIMIT:
+            complete_t = True
             break
         time.sleep(random.uniform(1.5, 3.0))
-    return out, pages_ok
+    return out, pages_ok, complete_t
 
 
 # ---------------- Portals ----------------
@@ -251,7 +253,7 @@ def portals_fetch_pages(gift_name: str):
         print(f"  [i] Portals: коллекция не найдена: {gift_name}")
         return [], 0
     cid, coll = got
-    out, pages_ok = [], 0
+    out, pages_ok, complete_p = [], 0, False
     for p in range(PORTALS_PAGES):
         params = {
             "offset": p * PORTALS_LIMIT, "limit": PORTALS_LIMIT,
@@ -273,6 +275,7 @@ def portals_fetch_pages(gift_name: str):
         except Exception:
             break
         if not results:
+            complete_p = True
             break
         pages_ok += 1
         for it in results:
@@ -300,9 +303,10 @@ def portals_fetch_pages(gift_name: str):
             if len(out) >= 90:
                 break
         if len(results) < PORTALS_LIMIT:
+            complete_p = True
             break
         time.sleep(random.uniform(1.5, 3.0))
-    return out, pages_ok
+    return out, pages_ok, complete_p
 
 
 def parse_model_rarity(model: str) -> float:
@@ -539,15 +543,24 @@ def find_with_model_deals(all_lots, rate: float):
                 refined = []
                 for l in cand_lots:
                     f_i = fair_ton
+                    src_i = fair_src
+                    # надо перебить ЖИВОЕ предложение того же фона: планка по
+                    # второму-снизу его списку (сам кандидат — самый дешёвый)
+                    same_bg = sorted(l2["price_ton"] for l2 in mlots if l2["backdrop"] == l["backdrop"])
+                    if len(same_bg) >= 2:
+                        second = same_bg[1] if l["price_ton"] <= same_bg[0] else same_bg[0]
+                        if second > 0 and second < f_i:
+                            f_i = second
+                            src_i = "перебил соседа"
                     own = l.get("id") if l.get("venue") == "Portals" else ""
                     if own:
                         own_avg = portals_sold_avg(own)
-                        if own_avg > 0:
-                            f_i = min(f_i, own_avg)
-                            if f_i < fair_ton:
-                                l["_fair_src"] = "свой SKU"
+                        if own_avg > 0 and own_avg < f_i:
+                            f_i = own_avg
+                            src_i = "свой SKU"
                     if l["price_ton"] * 100.0 <= f_i * (100.0 - DEAL_PCT):
                         l["_fair_ton"] = f_i
+                        l["_fair_src"] = src_i
                         refined.append(l)
                 cand_lots = refined
             if fair_ton <= 0 or not cand_lots:
@@ -676,6 +689,63 @@ def ping_server():
         pass
 
 
+def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list):
+    """Лоты GIFTS, которые были на проде, а теперь их НЕТ в полном снимке
+    конкретной площадки — реально купили/сняли. Помечаем gone (уйдут с ленты).
+    fetch_ok: gift -> {venue: снимок_прочитан_целиком} — если площадка не прочитана
+    целиком, маркировку для её лотов не делаем (иначе заметём живые лоты)."""
+    if "--no-push" in sys.argv or not WORKER_SECRET:
+        return
+    import httpx
+    fresh_by_gift = {}
+    for gift, gift_lots in all_lots.items():
+        for l in gift_lots:
+            v = l.get("venue", "")
+            if v == "Tonnel":
+                vid = f"tonnel-{l.get('gift_id', '') or l.get('gift_num', '')}"
+            elif v == "Fragment":
+                vid = f"fragment-{l.get('slug', '') or l.get('gift_num', '')}"
+            else:
+                vid = f"portals-{l.get('tg_id', '') or l.get('gift_num', '')}"
+            fresh_by_gift.setdefault(gift, {}).setdefault(v, set()).add(vid[:100])
+    try:
+        r = httpx.get(
+            f"{SERVER_URL}/api/worker/lots-ids",
+            params={"source": "GIFTS"},
+            headers={"X-Worker-Secret": WORKER_SECRET}, timeout=60,
+        )
+        if r.status_code != 200:
+            return
+        prod_rows = r.json().get("rows", [])
+        gone = []
+        for row in prod_rows:
+            lot_id = row.get("id", "")
+            title = row.get("title", "")
+            gift = title.split(" —")[0].strip()
+            vk = {v for v in ("portals", "tonnel", "fragment") if str(lot_id).startswith(v + "-")}
+            vk2 = next(iter(vk), "")
+            venue = {"portals": "Portals", "tonnel": "Tonnel", "fragment": "Fragment"}.get(vk2)
+            if not venue or venue == "Fragment":
+                continue  # Fragment маркировать нечем (снимок без флага полноты)
+            if not fetch_ok.get(gift, {}).get(venue):
+                continue  # площадку не прочитали целиком — снимок неполный
+            fresh_set = fresh_by_gift.get(gift, {}).get(venue, set())
+            if lot_id not in fresh_set:
+                gone.append(lot_id)
+        if not gone:
+            return
+        for k in range(0, len(gone), 100):
+            rg = httpx.post(
+                f"{SERVER_URL}/api/worker/lots-gone",
+                headers={"X-Worker-Secret": WORKER_SECRET},
+                json={"source": "GIFTS", "ids": gone[k:k + 100]}, timeout=60,
+            )
+            if rg.status_code == 200:
+                print(f"пропавших лотов GIFTS помечено: {rg.json().get('gone', 0)}")
+    except Exception as e:
+        print(f"[!] маркировка gone не удалась: {e}")
+
+
 def main():
     ping_server()
     watchlist = load_watchlist()
@@ -683,16 +753,18 @@ def main():
     rate = ton_rub_rate()
     print(f"курс TON: {rate:.1f} ₽")
     all_lots = {}
+    fetch_ok = {}  # gift -> {'Tonnel': полный_снимок, 'Portals': ...}
     ok = []
     for gift in watchlist:
-        t_lots, _ = tonnel_fetch_pages(gift)
+        t_lots, _, t_full = tonnel_fetch_pages(gift)
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
-        p_lots, _ = portals_fetch_pages(gift)
+        p_lots, _, p_full = portals_fetch_pages(gift)
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
         f_lots = fragment_fetch(gift)
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
         total = t_lots + p_lots + f_lots
         all_lots[gift] = total
+        fetch_ok[gift] = {"Tonnel": bool(t_full), "Portals": bool(p_full)}
         venue_t = len(t_lots)
         venue_p = len(p_lots)
         venue_f = len(f_lots)
@@ -712,6 +784,7 @@ def main():
     deals = uniq[:20]
     print(f"выгодных: {len(deals)}")
     lots = [to_lot_dict(d, rate) for d in deals]
+    mark_gone_lots(all_lots, fetch_ok, lots)
     if "--no-push" not in sys.argv:
         saved, skipped = push_to_server(lots)
         print(f"пуш: saved={saved} skipped={skipped}")

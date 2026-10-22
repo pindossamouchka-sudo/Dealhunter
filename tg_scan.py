@@ -858,8 +858,60 @@ async def run():
         if all_lots and ("--push" in sys.argv or cmd == "--push"):
             saved = push_to_server(all_lots)
             print(f"Принято на сервер: {saved}")
+            await mark_gone_tg(client, all_lots)
     finally:
         await client.disconnect()
+
+
+async def mark_gone_tg(client, all_lots):
+    """Пост пропал с барахолки (удалён/отредактирован в «продано») — лот реально
+    ушёл. Проверяем по самому Telethon и помечаем gone на сервере."""
+    if "--no-push" in sys.argv or not WORKER_SECRET:
+        return
+    import httpx
+    try:
+        r = httpx.get(
+            f"{SERVER_URL}/api/worker/lots-ids",
+            params={"source": "TG"},
+            headers={"X-Worker-Secret": WORKER_SECRET}, timeout=60,
+        )
+        if r.status_code != 200:
+            return
+        prod_rows = r.json().get("rows", [])
+    except Exception as e:
+        print(f"[!] маркировка gone TG не удалась (сеть): {e}")
+        return
+    fresh_ids = {str(l["id"]) for l in all_lots}
+    gone = []
+    for row in prod_rows:
+        lot_id = str(row.get("id", ""))
+        if lot_id in fresh_ids:
+            continue
+        try:
+            # id вида tg_<канал>_<msg_id>
+            parts = lot_id.split("_")
+            ch, mid = parts[1], parts[2]
+            mid = int(mid)
+        except Exception:
+            continue
+        try:
+            live = await client.get_messages(ch, ids=[mid])
+            if not live or not any(m.message for m in live):
+                gone.append(lot_id)
+        except Exception as e:
+            print(f"[g] {ch}: {type(e).__name__}")
+    if not gone:
+        return
+    try:
+        rg = httpx.post(
+            f"{SERVER_URL}/api/worker/lots-gone",
+            headers={"X-Worker-Secret": WORKER_SECRET},
+            json={"source": "TG", "ids": gone[:1000]}, timeout=60,
+        )
+        if rg.status_code == 200:
+            print(f"пропавших лотов TG помечено: {rg.json().get('gone', 0)}")
+    except Exception as e:
+        print(f"[!] маркировка gone TG не удалась: {e}")
 
 
 if __name__ == "__main__":

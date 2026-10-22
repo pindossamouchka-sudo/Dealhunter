@@ -605,7 +605,7 @@ function lotCategory(title, desc) {
       const el = document.getElementById(`lot-card-${lotId}`);
       if (el) {
         render();
-        showToast('✓ Помечено: забрали');
+        showToast('✓ Посмотрели');
       }
       fetch('/api/claim-lot', {
         method: 'POST',
@@ -838,7 +838,7 @@ function lotCategory(title, desc) {
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
               <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.city)} · ${esc(item.timeAgo)}</span>
             </div>
-            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ забрали</span>' : ''}
+            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ Посмотрели</span>' : ''}
           </div>
           <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${esc(item.title)}</h3>
           <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">

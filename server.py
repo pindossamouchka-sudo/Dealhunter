@@ -450,6 +450,8 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS ref_month_days INT DEFAULT 0;")
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS found_date DATE DEFAULT CURRENT_DATE;")
             await conn.execute("ALTER TABLE dh_monitors ADD COLUMN IF NOT EXISTS extras TEXT DEFAULT '';")
+            await conn.execute("ALTER TABLE dh_lots ADD COLUMN IF NOT EXISTS gone BOOLEAN DEFAULT FALSE;")
+            await conn.execute("ALTER TABLE dh_lots ADD COLUMN IF NOT EXISTS gone_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS signup_ip_hash TEXT DEFAULT '';")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS trial_claimed_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS quiet_start INT DEFAULT 23;")
@@ -829,24 +831,22 @@ async def fetch_db_external_lots(
             "DELETE FROM dh_lots WHERE source = 'TG' AND title ~* '^([\\W_]+)?(купл|ищу|предложите|нужен|спрос)'"
         )
         total_ext = await conn.fetchval("SELECT COUNT(*) FROM dh_lots")
-        rows = await conn.fetch("SELECT * FROM dh_lots ORDER BY created_at DESC LIMIT 100")
+        rows = await conn.fetch(
+            "SELECT * FROM dh_lots WHERE gone = FALSE ORDER BY created_at DESC LIMIT 100"
+        )
 
     results = []
     try:
-        from tg_scan import PRICE_FLOORS as TG_FLOORS, DEFAULT_FLOOR as TG_FLOOR
+        from tg_scan import floor_for as tg_floor_for
     except Exception:
-        TG_FLOORS, TG_FLOOR = {}, 900
+        tg_floor_for = None
     q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
     for r in rows:
         if source != "all" and r["source"].lower() != source.lower():
             continue
         if r["source"] == "TG":
             tl = re.sub(r"^[\W_]+", "", r["title"]).lower()
-            floor = TG_FLOOR
-            for brand, fl in TG_FLOORS.items():
-                if brand in tl:
-                    floor = fl
-                    break
+            floor = tg_floor_for(tl) if tg_floor_for else 900
             if r["price"] < floor or "запчаст" in tl:
                 continue
         if city and city not in r["city"] and r["city"] != "Вся РФ":
@@ -1794,6 +1794,45 @@ async def api_worker_purge(body: PurgeRequest, x_worker_secret: str = Header(def
         )
     deleted = int(r.split()[-1]) if r else 0
     return {"status": "ok", "deleted": deleted}
+
+
+@app.get("/api/worker/lots-ids")
+async def api_worker_lots_ids(source: str = "TG", x_worker_secret: str = Header(default="")):
+    """Список id-ов активных лотов источника (для проверки сканером «пропал ли лот»)."""
+    if not WORKER_SECRET or not hmac.compare_digest(x_worker_secret.encode(), WORKER_SECRET.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if source not in ("TG", "GIFTS"):
+        raise HTTPException(status_code=400, detail="bad source")
+    pool = require_db()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, title FROM dh_lots WHERE source = $1 AND gone = FALSE LIMIT 2000", source
+        )
+    return {"rows": [{"id": r["id"], "title": r["title"]} for r in rows]}
+
+
+class LotsGoneRequest(BaseModel):
+    source: str = "TG"
+    ids: List[str] = []
+
+
+@app.post("/api/worker/lots-gone")
+async def api_worker_lots_gone(body: LotsGoneRequest, x_worker_secret: str = Header(default="")):
+    """Помечает лоты пропавшими (реально купили/сняли с продажи), а не по клику."""
+    if not WORKER_SECRET or not hmac.compare_digest(x_worker_secret.encode(), WORKER_SECRET.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if body.source not in ("TG", "GIFTS") or not body.ids:
+        return {"status": "ok", "gone": 0}
+    ids = [str(i) for i in body.ids[:2000]]
+    pool = require_db()
+    async with pool.acquire() as conn:
+        r = await conn.execute(
+            "UPDATE dh_lots SET gone = TRUE, gone_at = NOW() "
+            "WHERE source = $1 AND id = ANY($2::text[])",
+            body.source, ids,
+        )
+    gone = int(r.split()[-1]) if r else 0
+    return {"status": "ok", "gone": gone}
 
 
 # =====================================================================
