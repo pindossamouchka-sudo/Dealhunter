@@ -181,83 +181,445 @@ def _is_catalog_post(text: str) -> bool:
     return False
 
 
-def _make_title(text: str) -> str:
-    """вытащить из поста название самой вещи: строка/сегмент с продуктом + модель,
-    не рекламная прелюдия («весь товар новый, оригинал…»)"""
-    raw_lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    # разбиваем длинные строки на фразы (по . ; ! ?)
-    lines = []
-    for ln in raw_lines[:12]:
-        parts = re.split(r"[.;!?]\s*", ln)
-        lines.extend([p.strip() for p in parts if p.strip()])
-    best, best_score = None, -99
-    for ln in lines[:16]:
-        if len(ln) > 95:
-            continue
-        tl = ln.lower()
-        score = 0
-        if PRODUCT_PAT.search(tl):
-            score += 8
-        if re.search(r"\d", tl):
-            score += 2
-        for g in GENERIC_TITLE_WORDS:
-            if g in tl:
-                score -= 5
-        for w in CHATTER_WORDS:
-            if w in tl:
-                score -= 12
-        if 10 <= len(ln) <= 70:
-            score += 2
-        if score > best_score:
-            best, best_score = ln, score
-    if best_score < 0 or not best:
-        # нет ни одного «вещевого» кандидата — пост не лот; без выдуманных названий
-        return ""
-    # чистим: хэштеги, эмодзи, «продам/срочно», висячую пунктуацию
-    title = re.sub(r"#\w+", "", best)
-    title = "".join(
-        ch for ch in title
-        if not (0x1F000 <= ord(ch) <= 0x1FAFF) and ord(ch) not in (0x200D, 0xFE0F, 0x2764, 0x2B50, 0x2728, 0x2705)
-    )
-    for _ in range(3):
-        t2 = SALE_PREFIX_RE.sub("", title).strip()
-        if t2 == title:
-            break
-        title = t2
-    title = re.sub(r"^[\W_]+", "", title).strip(" −–—-:,. ").strip()
-    return title[:120]
+# ---- распознавание товара: бренд + модель + характеристики + состояние ----
+# бу-рынок = ТОЛЬКО техника и электроника (телефон/ноутбук/приставка/аудио/...).
 
-# минимальные правдоподобные цены (защита от «запчастей» и цен «со скупа»)
-PRICE_FLOORS = {
-    "iphone": 3500, "айфон": 3500, "galaxy": 3500, "samsung": 3500,
-    "macbook": 14000, "ноутбук": 8000, "playstation": 7000, "ps5": 7000, "ps4": 4500,
-    "airpods": 900, "наушники": 700, "watch": 1600, "часы": 1600,
-    "dyson": 4000, "redmi": 2500, "xiaomi": 2500, "honor": 2000, "poco": 2500,
-    "мотовездеход": 25000, "мотоцикл": 20000, "мото": 15000, "квадроцикл": 25000,
-    "скутер": 12000, "самокат": 3000, "мопед": 12000,
-}
+COND_WORDS = [
+    (r"как новый", "как новый"),
+    (r"идеальн", "идеальное"),
+    (r"отличн", "отличное"),
+    (r"\bхорош[еои]", "хорошее"),
+    (r"не работает|бита\b|дефект", "с дефектом"),
+    (r"\bновый\b", "новый"),
+]
+
+
+def _battery(t: str):
+    for head in ("батар", "аккум", "акб", "емкость"):
+        idx = t.find(head)
+        if idx == -1:
+            continue
+        m = re.search(r"(\d{2,3})\s*%", t[idx: idx + 30])
+        if m:
+            v = int(m.group(1))
+            if 50 <= v <= 100:
+                return f"батарея {v}%"
+    return None
+
+
+def _storage(t: str):
+    m = re.search(r"\b(\d{1,2})\s*/\s*(\d{3,4})\s*(?:гб|gb)?", t, re.I)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        # «8/10» — это состояние, не память
+        if 3 <= a <= 32 and b in (64, 128, 256, 512, 1024):
+            return f"{a}/{b}GB"
+    m = re.search(r"\b(\d{1,2})\s*га\s*/\s*(\d{3,4})\s*(?:гб|gb)", t, re.I)
+    if m and int(m.group(1)) <= 32 and int(m.group(2)) in (64, 128, 256, 512, 1024):
+        return f"{m.group(1)}/{m.group(2)}GB"
+    m = re.search(r"\b(\d{1,4})\s*(гб|gb|тб|tb)\b", t, re.I)
+    if m:
+        v, u = int(m.group(1)), m.group(2).lower()
+        if u in ("тб", "tb") and 1 <= v <= 4:
+            return f"{v}TB"
+        if u in ("гб", "gb") and 16 <= v <= 1024:
+            return f"{v}GB"
+    return None
+
+
+def _phone_storage(t: str):
+    """для телефонов пишут просто «256» без «гб» — ловим и это"""
+    if re.search(r"\b(iphone|айфон|redmi|редми|poco|поко|xiaomi)", t, re.I):
+        m = re.search(r"\b(64|128|256|512)\b(?!\s*\d)(?!\s*(?:руб|₽|rub))", t)
+        if m:
+            return f"{m.group(1)}GB"
+    return None
+
+
+def _condition(t: str):
+    m = re.search(r"состояние\s*[:\- ]?\s*(\d(?:[.,]\d)?)(?!\s*\d|%)(?:\s*/\s*10)?", t)
+    if m:
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except ValueError:
+            v = 0
+        if 1 <= v <= 10:
+            s = str(v).rstrip("0").rstrip(".")
+            return f"состояние {s}/10"
+    m = re.search(r"(\d(?:[.,]\d)?)\s*/\s*10(?!\d)", t)
+    if m:
+        try:
+            v = float(m.group(1).replace(",", "."))
+        except ValueError:
+            v = 0
+        if 1 <= v <= 10:
+            s = str(v).rstrip("0").rstrip(".")
+            return f"состояние {s}/10"
+    for pat, rep in COND_WORDS:
+        if re.search(pat, t):
+            return rep
+    if re.search(r"гаранти\w*", t):
+        return "на гарантии"
+    return None
+
+
+def _join(parts):
+    return ", ".join(p for p in parts if p)
+
+
+PHONE_VARIANT = {"pro max": "Pro Max", "pro": "Pro", "max": "Max", "plus": "Plus", "mini": "Mini",
+                 "про макс": "Pro Max", "про": "Pro", "макс": "Max", "плюс": "Plus", "мини": "Mini",
+                 "про max": "Pro Max", "pro макс": "Pro Max"}
+PHONE_BRAND = {"iphone": "iPhone", "айфон": "iPhone",
+               "xiaomi": "Xiaomi", "сяоми": "Xiaomi",
+               "redmi": "Redmi", "редми": "Redmi",
+               "poco": "Poco", "поко": "Poco",
+               "honor": "Honor", "хонор": "Honor",
+               "huawei": "Huawei", "хуавей": "Huawei"}
+
+PHONE_PAT = re.compile(r"\b(iphone|айфон)\s*(1[0-8]|2\d|[4-9]|x|se|xr)?" + r"(\s*(pro\s*max|про\s*макс|pro|max|макс|plus|плюс|mini|мини))?", re.I)
+PHONE_BR_PAT = re.compile(r"\b(xiaomi|redmi|poco|сяоми|редми|поко)\s*((?:note\s?\d{1,2}|\d{1,2})[a-z]?(?:\s?(?:pro|прo|про))?)?", re.I)
+HONOR_PAT = re.compile(r"\b(honor|хонор)\s*((?:magic\s?)?\d{1,2}[a-z]?|x\d)?", re.I)
+PIXEL_PAT = re.compile(r"\bpixel?\s?(\d[a-z]?)?\s?(pro)?", re.I)
+HUAWEI_PAT = re.compile(r"\b(huawei|хуавей)\s*(p\d{1,2}|mate\s?\d{1,2})?", re.I)
+ONEPLUS_PAT = re.compile(r"\b(?:one\s*plus|ван\s*плюс)\s?(\d{1,2}[a-z]?|7t)?", re.I)
+GALAXY_PAT = re.compile(r"\b(?:galaxy|самсунг|samsung)\s*(?:s|note|a|z)\s?\d{1,2}", re.I)
+MACBOOK_PAT = re.compile(r"\bmacbook\s*(pro|air)?", re.I)
+CHIP_PAT = re.compile(r"\bm([1-4])\s*(pro|max)?\b")
+IPAD_PAT = re.compile(r"\b(ipad|айпад)\s*(pro|air|mini)?", re.I)
+LAPTOP_PAT = re.compile(r"\b(ноутбук|лаптоп|ultrabook|matebook)\b", re.I)
+LAPTOP_BRAND = re.compile(r"\b(asus|lenovo|hp|dell|acer|msi|honor|huawei|lg|irbis|dexxp)\b", re.I)
+PC_PAT = re.compile(r"\b(компьютер|системник|системн\w*|стационарн\w*|моноблок)\b", re.I)
+MONITOR_PAT = re.compile(r"\bмонитор\w*", re.I)
+MONITOR_BRAND = re.compile(r"\b(asus|dell|lg|samsung|aoc|msi|philips|benq|xiaomi|xiaom)\b", re.I)
+INCH_PAT = re.compile(r"\b(1[5-9]|2[0-9]|3[0-9]|4[0-9]|5[0-9]|6[0-5])\s*(?:\"|дюйм)", re.I)
+SSD_PAT = re.compile(r"\b(ssd|hdd|ж[её]стк\w*|внешн\w*\s*диск|накопител\w*|m\.2)\b", re.I)
+PS_PAT = re.compile(r"\b(?:ps|playstation|плейстеш)\s?([3-5])(\s?(pro|slim|digital|цифр))?", re.I)
+XBOX_PAT = re.compile(r"\bxbox\s?(one|series\s?s|series\s?x|\bs\b|\bx\b)?", re.I)
+SWITCH_PAT = re.compile(r"\b(?:nintendo\s*)?switch\s?(lite|oled)?", re.I)
+GPU_PAT = re.compile(r"\b(rtx|gtx)\s?(\d{3,4})(\s?(ti|super))?\b", re.I)
+RADEON_PAT = re.compile(r"\bradeon\s?(rx\s?\d{3,4})?", re.I)
+GPU_BRAND = re.compile(r"\b(asus|msi|gigabyte|zotac|evga|inno3d|palit|gainward|asrock)\b", re.I)
+AIRPODS_PAT = re.compile(r"\bairpods\s?(pro)?\s?([1-3])?", re.I)
+BUDS_PAT = re.compile(r"\b(?:galaxy\s?)?buds\s?(\d|pro|fe|\d\s?pro|2\s?pro)?", re.I)
+HEAD_NOUN = re.compile(r"\b(наушник\w*|гарнитур\w*)", re.I)
+HEAD_BRAND = re.compile(r"\b(jbl|xiaomi|honor|sennheiser|marshall|anker|edifier|qcy|jabra|sony)\b", re.I)
+HEAD_CODE = re.compile(r"\b(?:wh|wf|qh|wf)[-\s]?\d{3,4}[a-z]?\b", re.I)
+WATCH_PAT = re.compile(r"\bapple\s*watch\s?(s\d|se|ultra\s?2?)?", re.I)
+GALWATCH_PAT = re.compile(r"\bgalaxy\s?watch\s?(\d|active\s?2?|classic)?\s?(pro)?", re.I)
+SMARTWATCH_NOUN = re.compile(r"\bсмарт.?часы\b|\bчасы\b", re.I)
+SMART_BRAND = re.compile(r"\b(xiaomi|huawei|honor|amazfit|samsung)\b", re.I)
+TV_PAT = re.compile(r"\b(телевизор|tv)\b", re.I)
+TV_BRAND = re.compile(r"\b(lg|samsung|philips|xiaomi|sony|haier|horizont|supra)\b", re.I)
+DYSON_MODEL = re.compile(r"\b(v\d{1,2}|s\d{2}|sv\d{2})\b", re.I)
+SCOOTER_PAT = re.compile(r"\bэлектросамокат\w*", re.I)
+SCOOTER_BRAND = re.compile(r"(xiaomi|kugou?|kugoo|ninebot|niubility|likebike|hiper)", re.I)
+REG_PAT = re.compile(r"\bвидеорегистратор\w*", re.I)
+REG_BRAND = re.compile(r"\b(70mai|dvr|xiaomi|neoline|inspector|carcam|sho-me)\b", re.I)
+DRONE_PAT = re.compile(r"\b(dji|квадрокоптер|дрон)\b", re.I)
+CAMERA_NOUN = re.compile(r"\b(камер\w*|фотоаппара|зеркалк\w*|беззеркалк\w*)")
+CAMERA_BRAND = re.compile(r"\b(canon|nikon|sony|fujifilm|panasonic|olympus|pentax)\b", re.I)
+CAMERA_CODE = re.compile(r"\b(a[1-9] ?(?:iii|iv|v|ii|i)?|\d{3,5}d)\b", re.I)
+
+
+def _build_tech_title(text: str) -> str:
+    """распознать товар: собрать «Бренд Модель, характеристики, состояние».
+    Никакой техники в посте — вернуть '' (пост не лот)."""
+    t = text.lower().replace("ё", "е")
+    base = None
+
+    # --- телефоны ---
+    m = PHONE_PAT.search(t)
+    if m:
+        num = (m.group(2) or "").upper()
+        vkey = re.sub(r"\s+", " ", (m.group(4) or "").lower())
+        var = PHONE_VARIANT.get(vkey, "")
+        model = " ".join(x for x in (num, var) if x)
+        base = "iPhone" + (f" {model}" if model else "")
+    if not base:
+        m = PHONE_BR_PAT.search(t)
+        if m and (m.group(2) or m.group(1)):
+            b = PHONE_BRAND.get(m.group(1), m.group(1))
+            model = (m.group(2) or "").strip()
+            # «Xiaomi Redmi Note 12 Pro»: второй бренд уточняет модель
+            if not model:
+                m2 = PHONE_BR_PAT.search(t, m.end())
+                if m2 and PHONE_BRAND.get(m2.group(1), "").lower() != b.lower():
+                    b = PHONE_BRAND.get(m2.group(1), m2.group(1))
+                    model = (m2.group(2) or "").strip()
+            model = re.sub(r"\s+", " ", model).upper().replace("NOTE", "Note").replace(" PRO", " Pro").replace("ПРО", " Pro")
+            base = b + (f" {model}" if model else "")
+    if not base:
+        m = GALAXY_PAT.search(t)
+        if m:
+            base = "Samsung " + re.sub(r"\s+", " ", m.group(0)).upper().replace("SAMSUNG ", "").replace("GALAXY", "Galaxy")
+    if not base:
+        m = HONOR_PAT.search(t)
+        if m and m.group(2):
+            base = "Honor " + re.sub(r"\s+", " ", m.group(2)).upper().replace("MAGIC", "Magic")
+    if not base:
+        m = PIXEL_PAT.search(t)
+        if m:
+            base = "Google Pixel " + (m.group(1) or "").upper() + (" Pro" if m.group(2) else "")
+    if not base:
+        m = HUAWEI_PAT.search(t)
+        if m:
+            base = "Huawei " + re.sub(r"\s+", " ", m.group(2) or "").upper().replace("MATE", "Mate")
+    if not base:
+        m = ONEPLUS_PAT.search(t)
+        if m:
+            base = "OnePlus " + (m.group(1) or "").upper()
+
+    # --- компьютеры/планшеты/ТВ ---
+    if not base:
+        m = MACBOOK_PAT.search(t)
+        if m:
+            var = (m.group(1) or "").capitalize()
+            chip = CHIP_PAT.search(t)
+            st = _storage(t)
+            bits = ["MacBook", var]
+            if chip:
+                bits.append((f"M{chip.group(1)}" + (f" {chip.group(2).title()}" if chip.group(2) else "")))
+            if st:
+                bits.append(st)
+            base = " ".join(bits)
+    if not base:
+        m = IPAD_PAT.search(t)
+        if m:
+            var = (m.group(2) or "").capitalize()
+            st = _storage(t)
+            base = ("iPad" + (f" {var}" if var else "")) + (f" {st}" if st else "")
+    if not base:
+        m = LAPTOP_PAT.search(t)
+        if m:
+            b = LAPTOP_BRAND.search(t)
+            st = _storage(t)
+            base = "Ноутбук" + (f" {b.group(1).upper()}" if b else "") + (f" {st}" if st else "")
+    if not base:
+        m = PC_PAT.search(t)
+        if m:
+            base = "Компьютер" + (f" {_storage(t)}" if _storage(t) else "")
+    if not base:
+        m = MONITOR_PAT.search(t)
+        if m:
+            b = MONITOR_BRAND.search(t)
+            inch = INCH_PAT.search(t)
+            base = "Монитор" + (f" {b.group(1).upper()}" if b else "") + (f' {inch.group(1)}"' if inch else "")
+    if not base:
+        m = SSD_PAT.search(t)
+        if m:
+            st = _storage(t)
+            noun = "SSD" if re.search(r"\bssd|m\.2", t) else ("HDD" if re.search(r"\bhdd", t) else "Жёсткий диск")
+            base = noun + (f" {st}" if st else "")
+
+    # --- консоли ---
+    if not base:
+        m = PS_PAT.search(t)
+        if m:
+            var = (m.group(3) or "").lower()
+            var = {"pro": "Pro", "slim": "Slim", "digital": "Digital", "цифр": "Digital"}.get(var, "")
+            base = f"PlayStation {m.group(1)}" + (f" {var}" if var else "")
+    if not base:
+        m = XBOX_PAT.search(t)
+        if m:
+            v = (m.group(1) or "").lower().replace("\u00a0", " ")
+            if v.startswith("series"):
+                var = f"Series {v[-1].upper()}"
+            elif v == "one":
+                var = "One"
+            else:
+                var = v.upper()
+            base = "Xbox" + (f" {var}".strip() if var else "")
+    if not base:
+        m = SWITCH_PAT.search(t)
+        if m:
+            v = (m.group(1) or "").lower()
+            var = {"oled": "OLED", "lite": "Lite"}.get(v, v.capitalize())
+            base = "Nintendo Switch" + (f" {var}" if var else "")
+
+    # --- видеокарты ---
+    if not base:
+        m = GPU_PAT.search(t)
+        if m:
+            gb = GPU_BRAND.search(t)
+            b = gb.group(1).upper() if gb else "NVIDIA"
+            var = (m.group(4) or "").upper()
+            if var.lower() == "ti":
+                var = "Ti"
+            base = f"{b} {m.group(1).upper()} {m.group(2)}" + (f" {var}" if var else "")
+    if not base:
+        m = RADEON_PAT.search(t)
+        if m and m.group(1):
+            gb = GPU_BRAND.search(t)
+            b = gb.group(1).upper() if gb else "AMD"
+            base = f"{b} {m.group(1).upper()}"
+
+    # --- аудио/часы ---
+    if not base:
+        m = AIRPODS_PAT.search(t)
+        if m:
+            gen = f" {m.group(2)}" if m.group(2) else ""
+            base = ("AirPods Pro" if m.group(1) else "AirPods") + gen
+    if not base:
+        m = BUDS_PAT.search(t)
+        if m:
+            var = (m.group(1) or "").capitalize()
+            base = "Buds" + (f" {var}" if var else "")
+    if not base:
+        m = HEAD_NOUN.search(t)
+        if m:
+            b = HEAD_BRAND.search(t)
+            base = "Наушники" + (f" {b.group(1).upper()}" if b else "")
+            code = HEAD_CODE.search(text)
+            if code:
+                base += f" {code.group(0).upper()}"
+    if not base:
+        m = WATCH_PAT.search(t)
+        if m:
+            var = re.sub(r"\s+", " ", (m.group(1) or "")).upper().replace("ULTRA", "Ultra").replace("SE", "SE")
+            base = "Apple Watch" + (f" {var}" if var else "")
+    if not base:
+        m = GALWATCH_PAT.search(t)
+        if m:
+            var = re.sub(r"\s+", " ", (m.group(1) or "")).upper()
+            pro = " Pro" if m.group(2) else ""
+            base = "Samsung Galaxy Watch" + (f" {var}{pro}" if var else "")
+    if not base:
+        m = SMARTWATCH_NOUN.search(t)
+        if m:
+            b = SMART_BRAND.search(t)
+            if not b and not re.search(r"смарт", t):
+                # обычные наручные часы — не наша категория
+                return ""
+            base = "Смарт-часы" + (f" {b.group(1).title()}" if b else "")
+
+    # --- ТВ/дом/ков: прочая техника ---
+    if not base:
+        m = TV_PAT.search(t)
+        if m:
+            b = TV_BRAND.search(t)
+            inch = INCH_PAT.search(t)
+            base = "Телевизор" + (f" {b.group(1).upper()}" if b else "") + (f' {inch.group(1)}"' if inch else "")
+    if not base:
+        if re.search(r"\bпылесос\w*", t):
+            if re.search(r"\b(dyson|дайсон)", t):
+                mod = DYSON_MODEL.search(t)
+                base = "Пылесос Dyson" + (f" {mod.group(1).upper()}" if mod else "")
+            else:
+                b = re.search(r"\b(xiaomi|bosch|philips|lg|samsung|panasonic|karcher|hitachi|makita)\b", t, re.I)
+                mod = re.search(r"\b([a-z]{2,4}[- ]?\d{2,4}[a-z]{0,2})\b", t)
+                base = "Пылесос" + (f" {b.group(1).upper()}" if b else "") + (f" {mod.group(1).upper()}" if mod else "")
+    if not base:
+        m = SCOOTER_PAT.search(t)
+        if m:
+            b = SCOOTER_BRAND.search(t)
+            base = "Электросамокат" + (f" {b.group(1).title()}" if b else "")
+    if not base:
+        m = REG_PAT.search(t)
+        if m:
+            b = REG_BRAND.search(t)
+            base = "Видеорегистратор" + (f" {b.group(1).upper()}" if b else "")
+    if not base:
+        m = DRONE_PAT.search(t)
+        if m:
+            base = "Дрон"
+    if not base:
+        m = CAMERA_NOUN.search(t)
+        if m:
+            b = CAMERA_BRAND.search(t)
+            code = CAMERA_CODE.search(t)
+            base = "Фотокамера" + (f" {b.group(1).title()}" if b else "") + (f" {code.group(0).upper()}" if code else "")
+
+    if not base:
+        return ""
+
+    parts = [base]
+    st = _storage(t) or _phone_storage(t)
+    if st and st.lower() not in base.lower():
+        parts.append(st)
+    bat = _battery(t)
+    if bat:
+        parts.append(bat)
+    cond = _condition(t)
+    if cond and "с дефектом" not in (cond, base):
+        parts.append(cond)
+    title = _join(parts)
+    return title if len(title) >= 4 else ""
+
+# клин по категориям: (регэксп, минимальная правдоподобная цена):
+# сравниваются ПО ПОРЯДКУ, берём Первое совпадение (сначала узкие модели)
+FLOOR_RULES = [
+    (r"\b(ps\s?4|playstation\s?4)\b", 4500),
+    (r"\b(ps\s?5|playstation\s?5)\b", 7000),
+    (r"playstation", 7000),
+    (r"\bxbox\b", 4500),
+    (r"\bswitch\b", 4500),
+    (r"\b(macbook|макбук)\b", 14000),
+    (r"\b(ноутбук|ноуттб)\b", 8000),
+    (r"\b(rt[хx]|rtx)\s?\d{3,4}", 5000),
+    (r"\b(gtx|gt[хx])\s?\d{3,4}", 2500),
+    (r"\bradeon\b", 3000),
+    (r"\b(redmi|редми)\b", 2500),
+    (r"\b(poco|поко)\b", 2500),
+    (r"\b(xiaomi|сяоми)\b", 2500),
+    (r"\b(honor|хонор)\b", 2000),
+    (r"\b(dyson|дайсон)\b", 4000),
+    (r"\b(ipad|айпад)\b", 6000),
+    (r"\b(iphone|айфон)\b", 3500),
+    (r"\b(galaxy|самсунг)\b", 3500),
+    (r"\b(samsung)\b", 3000),
+    (r"\b(airpods)\b", 900),
+    (r"\b(наушник\w*|гарнитур\w*)\b", 700),
+    (r"\b(apple\s?watch)\b|\bwatch\b", 1600),
+    (r"\bсмарт.?часы\b", 1500),
+    (r"\bмонитор\w*\b", 1500),
+    (r"\bтелевизор\b", 4000),
+    (r"\bпылесос\w*\b", 2000),
+    (r"\bэлектросамокат\w*\b", 3000),
+    (r"\b(ssd|hdd)\b", 600),
+    (r"\b(дрон|dji)\b", 3000),
+    (r"\b(фотокамера|камер\w*|фотоаппара|зеркалк\w*)\b", 3000),
+    (r"\bкомпьютер\b|системник", 5000),
+    (r"\bвидеорегистратор\w*\b", 1500),
+]
 DEFAULT_FLOOR = 900
+
+
+def floor_for(title: str) -> int:
+    tl = title.lower().replace("ё", "е")
+    for pat, fl in FLOOR_RULES:
+        if re.search(pat, tl):
+            return fl
+    return DEFAULT_FLOOR
 
 PRICE_RE = re.compile(r"(\d[\d\s\u00a0.,]{2,13})\s*(руб|₽|р\.|р(?!\w)|rub)", re.IGNORECASE)
 
 
 def normalize_price(raw: str):
-    """«1 800 000» -> 1800000; «m1 180000 ₽» -> 180000 (чтобы приставка «m1» не приросла к цене)."""
+    """«1 800 000» -> 1800000; «m1 180000 ₽» -> 180000; «256 90000» -> 90000
+    (не прирасти к цене-мусору)"""
     groups = re.split(r"[\s\u00a0]+", (raw or "").strip())
     digits = re.sub(r"[^\d]", "", (raw or "").replace(",", "").replace(".", ""))
     if not digits:
         return 0
     val = int(digits)
-    if val >= 10_000_000:
+    if val >= 500_000:
+        # «256 90000» / «m1 180000»: последняя группа — сама цена
+        if len(groups) >= 2:
+            tail = int(re.sub(r"[^\d]", "", groups[-1]) or 0)
+            if 1000 <= tail <= 499_999:
+                return tail
+            # «1 800 000» — нормальное машинное написание крупной цены
+            if len(groups) >= 3 and all(1 <= len(g) <= 3 for g in groups):
+                return val
         return 0
-    # «m1 180000» из 2 групп: первая — мусорная приставка, берём вторую;
-    # «1 800 000» из 3+ групп — обычное машинное написание цены, не трогаем
     if val >= 1_000_000 and len(groups) == 2:
-        alt = int(re.sub(r"[^\d]", "", groups[1]))
+        # «m1 180000» из 2 групп: первая — мусорная приставка, берём вторую
+        alt = int(re.sub(r"[^\d]", "", groups[1]) or 0)
         if 0 < alt < val:
             val = alt
-    if val >= 10_000_000:
-        return 0
+    if val >= 1_000_000 and len(groups) >= 3 and all(1 <= len(g) <= 3 for g in groups):
+        return val
     return val
 
 
@@ -271,7 +633,9 @@ def clean_price(raw: str):
 def extract_lots(text: str, channel: str, msg_id: int):
     if not text or len(text) < 8:
         return None
-    low = text.lower()
+    low = text.lower().replace("ё", "е")
+    if "запчаст" in low or "разборк" in low:
+        return None
     if any(w in low for w in SCAM_WORDS):
         return None
     if any(w in low for w in DEMAND_WORDS):
@@ -296,7 +660,7 @@ def extract_lots(text: str, channel: str, msg_id: int):
     price = 0
     for m in PRICE_RE.finditer(text):
         cand = normalize_price(m.group(1))
-        if 300 <= cand <= 9_999_999:
+        if 300 <= cand <= 499_999:
             price = cand
             break
     if price == 0:
@@ -308,8 +672,10 @@ def extract_lots(text: str, channel: str, msg_id: int):
         for ln in lines:
             cand = 0
             for m in re.finditer(r"(\d[\d\s\u00a0.,]{2,9})(?!\w)", ln):
+                if "/" in m.group(1):
+                    continue  # «16/512» — память, не цена
                 v = normalize_price(m.group(1))
-                if 900 <= v <= 9_999_999:
+                if 900 <= v <= 499_999:
                     cand = v
             last = None
             if cand:
@@ -321,7 +687,7 @@ def extract_lots(text: str, channel: str, msg_id: int):
                 ms = list(re.finditer(r"(\d[\d\s\u00a0.,]{0,9})(?!\w)", ln))
                 if ms:
                     v = normalize_price(ms[-1].group(1))
-                    if 900 <= v <= 9_999_999:
+                    if 900 <= v <= 499_999:
                         last = v
             if not last:
                 continue
@@ -337,31 +703,16 @@ def extract_lots(text: str, channel: str, msg_id: int):
     # каталог продавца (много разных телефонов/товаров) — не частный лот
     if _is_catalog_post(text):
         return None
-    title = _make_title(text)
+    title = _build_tech_title(text)
+    if not title:
+        # техника не распознана — пост не наш лот (одежда/мебель/болтовня/услуги)
+        return None
     tl = title.lower()
-    if not title or len(title) < 5:
-        # ни одной вещевой строки — пост не лот (болтовня/анонс/магазин)
-        return None
-    # название обязано содержать конкретный товар — без него это не «продающий» пост
-    if not PRODUCT_PAT.search(tl):
-        return None
-    if _is_noise_title(title) and not has_sale:
-        return None
-    # служебные-как-название («Цена: 1», «Размер 80») — не вещь,
-    # но если после служебного слова есть продукт («Размер 80 (джинсы)») — берём
-    if _is_service_title(title):
-        return None
     # сверхкороткое название + копеечная цена — мусор
     if len(title) < 13 and price < 3000:
         return None
-    floor = DEFAULT_FLOOR
-    for brand, fl in PRICE_FLOORS.items():
-        if brand in tl:
-            floor = fl
-            break
+    floor = floor_for(title)
     if price < floor:
-        return None
-    if "запчаст" in tl:
         return None
     return {
         "id": f"tg_{channel}_{msg_id}",
@@ -496,6 +847,13 @@ async def run():
         merged = sorted(by_id.values(), key=lambda x: x["id"], reverse=True)[:300]
         LOTS_FILE.write_text(json.dumps(merged, ensure_ascii=False, indent=1), "utf-8")
         print(f"\nИтого свежих лотов: {len(all_lots)}. Всего в витрине: {len(merged)}. Файл: {LOTS_FILE.name}")
+
+        # свежие лоты отдельно (для контроля подавления мусора)
+        try:
+            Path("tg_fresh.json").write_text(
+                json.dumps(all_lots, ensure_ascii=False, indent=1), "utf-8")
+        except Exception:
+            pass
 
         if all_lots and ("--push" in sys.argv or cmd == "--push"):
             saved = push_to_server(all_lots)

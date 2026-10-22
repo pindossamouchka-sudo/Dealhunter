@@ -60,13 +60,13 @@ PORTALS_LIMIT = 30
 
 # Порог «выгодности»: цена ≤ медианы минус DEAL_PCT%
 # 18% — чтобы после комиссий перепродажи (~8%) сделка оставалась в плюсе
-DEAL_PCT = 18.0
+DEAL_PCT = 12.0
 # Оценка комиссий при перепродаже (доля от цены продажи)
 RESELL_FEE_PCT = 8.0
 # Минимальная чистая прибыль в ₽ после вычета комиссий
-MIN_NET_RUB = 1500
+MIN_NET_RUB = 500
 # Минимальное число листингов в выборке модели, чтобы ей верить
-MIN_SAMPLES = 5
+MIN_SAMPLES = 4
 # Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
 # Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
@@ -501,15 +501,18 @@ def find_with_model_deals(all_lots, rate: float):
     """list[lot]: {venue, gift, model, rarity, backdrop, symbol, price_ton, fair_ton, gift_id, tg_id, gift_num}"""
     st = load_state()
     deals = []
+    import collections as _c
+    diag = _c.Counter()
     for gift, lots in all_lots.items():
-        # сравниваем ТОЛЬКО одинаковые модели с одинаковым фоном:
-        # обычный фон и редкий стоят по-разному, сваливать нельзя
+        diag['lots'] += len(lots)
         by_model = {}
         for l in lots:
-            by_model.setdefault((l["model"], l["backdrop"]), []).append(l)
-        for (model, backdrop), mlots in by_model.items():
+            by_model.setdefault(l["model"], []).append(l)
+        for model, mlots in by_model.items():
             if len(mlots) < MIN_SAMPLES:
+                diag['мало_образцов'] += 1
                 continue
+            diag['групп'] += 1
             prices = [l["price_ton"] for l in mlots]
             median = statistics.median(prices)
             if median <= 0:
@@ -524,25 +527,44 @@ def find_with_model_deals(all_lots, rate: float):
             fair_ton = median
             fair_src = "листинги"
             cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT)]
+            if not cand_lots:
+                diag['дешёвых_нет'] += 1
             if cand_lots:
                 sold_ton, sold_n = model_sold_fair(mlots, median)
                 if sold_ton > 0:
                     fair_ton = min(sold_ton, median)
                     fair_src = f"продажи Portals ({sold_n})"
-                    cand_lots = [l for l in cand_lots if l["price_ton"] * 100.0 <= fair_ton * (100.0 - DEAL_PCT)]
+                # для каждого кандидата уточняем планку по СВОЕМУ SKU (частное
+                #_artist backdrop): его реальная цена продажи важнее модели
+                refined = []
+                for l in cand_lots:
+                    f_i = fair_ton
+                    own = l.get("id") if l.get("venue") == "Portals" else ""
+                    if own:
+                        own_avg = portals_sold_avg(own)
+                        if own_avg > 0:
+                            f_i = min(f_i, own_avg)
+                            if f_i < fair_ton:
+                                l["_fair_src"] = "свой SKU"
+                    if l["price_ton"] * 100.0 <= f_i * (100.0 - DEAL_PCT):
+                        l["_fair_ton"] = f_i
+                        refined.append(l)
+                cand_lots = refined
             if fair_ton <= 0 or not cand_lots:
+                diag['отсеяно_планкой'] += 1
                 continue
             for l in cand_lots:
-                gross_rub = rate * (fair_ton - l["price_ton"])
-                fees_rub = rate * fair_ton * RESELL_FEE_PCT / 100.0
+                f_i = l.get("_fair_ton", fair_ton)
+                gross_rub = rate * (f_i - l["price_ton"])
+                fees_rub = rate * f_i * RESELL_FEE_PCT / 100.0
                 net_rub = gross_rub - fees_rub
                 if net_rub < MIN_NET_RUB:
                     continue  # мелкие скидки не перекрывают комиссии
                 rar = parse_model_rarity(model)
                 deals.append({
                     "gift": gift, "model": model, "rarity": rar,
-                    "price_ton": l["price_ton"], "fair_ton": fair_ton,
-                    "fair_src": fair_src,
+                    "price_ton": l["price_ton"], "fair_ton": f_i,
+                    "fair_src": l.get("_fair_src", fair_src),
                     "venue": l["venue"], "backdrop": l["backdrop"],
                     "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
                     "gift_num": l.get("gift_num", ""),
@@ -551,6 +573,7 @@ def find_with_model_deals(all_lots, rate: float):
                     "net_rub": round(net_rub),
                     "floors": floors,
                 })
+    print('[diag]', dict(diag))
     return deals
 
 
