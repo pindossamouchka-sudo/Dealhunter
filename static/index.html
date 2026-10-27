@@ -19,6 +19,7 @@
       --glass-stroke: rgba(15, 17, 26, 0.08);
       --text-primary: #111216; --text-secondary: #5E626E; --text-muted: #969AA7;
       --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.28); --accent-soft: rgba(255, 90, 31, 0.13);
+      --accent-2: #FF7A45; --on-accent: #FFFFFF;
       --green: #18B259; --green-soft: rgba(24, 178, 89, 0.15);
     }
     [data-theme="dark"] {
@@ -30,51 +31,57 @@
       --glass-stroke: rgba(255, 255, 255, 0.07);
       --text-primary: #F5F6FA; --text-secondary: #9499A6; --text-muted: #5B606E;
       --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.38); --accent-soft: rgba(255, 90, 31, 0.17);
+      --accent-2: #FF7A45; --on-accent: #FFFFFF;
       --green: #2AD16C; --green-soft: rgba(42, 209, 108, 0.16);
     }
-    /* Темы профиля: accent + фон (выбор: localStorage dh_theme) */
+    /* Темы профиля: bg — точный код юзера, акцент — точный код юзера,
+       производные (canvas/glass/glow/on-accent) выведены под контраст */
     [data-theme="mint"] {
-      --bg-canvas: #0C1327; --bg-app: #121A3A;
-      --glass-card: rgba(30, 41, 74, 0.80);
-      --glass-pill: rgba(178, 242, 216, 0.08);
-      --glass-dock: rgba(18, 26, 54, 0.90);
-      --glass-border: rgba(178, 242, 216, 0.14);
+      --bg-canvas: #0C1122; --bg-app: #121A3A;
+      --glass-card: rgba(31, 42, 74, 0.74);
+      --glass-pill: rgba(178, 242, 216, 0.10);
+      --glass-dock: rgba(15, 21, 41, 0.90);
+      --glass-border: rgba(178, 242, 216, 0.16);
       --glass-stroke: rgba(178, 242, 216, 0.10);
-      --text-primary: #EDF6F2; --text-secondary: #9FB6AE; --text-muted: #64796F;
-      --accent: #B2F2D8; --accent-glow: rgba(178, 242, 216, 0.30); --accent-soft: rgba(178, 242, 216, 0.14);
-      --green: #4EE39C; --green-soft: rgba(78, 227, 156, 0.16);
+      --text-primary: #F4FAF8; --text-secondary: #9DAFC7; --text-muted: #5E6B85;
+      --accent: #B2F2D8; --accent-2: #7CDCBB; --on-accent: #0B2A20;
+      --accent-glow: rgba(178, 242, 216, 0.28); --accent-soft: rgba(178, 242, 216, 0.14);
+      --green: #34D399; --green-soft: rgba(52, 211, 153, 0.16);
     }
     [data-theme="forest"] {
-      --bg-canvas: #123024; --bg-app: #1B4332;
-      --glass-card: rgba(21, 52, 40, 0.82);
-      --glass-pill: rgba(255, 179, 138, 0.09);
-      --glass-dock: rgba(16, 44, 33, 0.92);
-      --glass-border: rgba(255, 179, 138, 0.14);
+      --bg-canvas: #10291E; --bg-app: #1B4332;
+      --glass-card: rgba(25, 54, 42, 0.78);
+      --glass-pill: rgba(255, 179, 138, 0.10);
+      --glass-dock: rgba(14, 33, 25, 0.90);
+      --glass-border: rgba(255, 179, 138, 0.16);
       --glass-stroke: rgba(255, 179, 138, 0.10);
-      --text-primary: #F2F5F1; --text-secondary: #A8B8AC; --text-muted: #6C7D71;
-      --accent: #FFB38A; --accent-glow: rgba(255, 179, 138, 0.30); --accent-soft: rgba(255, 179, 138, 0.15);
+      --text-primary: #F1F5F1; --text-secondary: #A2B3A6; --text-muted: #5F7165;
+      --accent: #FFB38A; --accent-2: #F49B6D; --on-accent: #2B120B;
+      --accent-glow: rgba(255, 179, 138, 0.28); --accent-soft: rgba(255, 179, 138, 0.15);
       --green: #34D399; --green-soft: rgba(52, 211, 153, 0.16);
     }
     [data-theme="olive"] {
-      --bg-canvas: #131315; --bg-app: #1C1C1E;
-      --glass-card: rgba(32, 32, 35, 0.82);
-      --glass-pill: rgba(138, 138, 75, 0.12);
-      --glass-dock: rgba(24, 24, 26, 0.92);
-      --glass-border: rgba(138, 138, 75, 0.18);
-      --glass-stroke: rgba(138, 138, 75, 0.12);
-      --text-primary: #F0F0EB; --text-secondary: #A6A697; --text-muted: #6E6E62;
-      --accent: #B5B565; --accent-glow: rgba(138, 138, 75, 0.32); --accent-soft: rgba(138, 138, 75, 0.18);
-      --green: #8BC34A; --green-soft: rgba(139, 195, 74, 0.16);
+      --bg-canvas: #101012; --bg-app: #1C1C1E;
+      --glass-card: rgba(30, 30, 34, 0.82);
+      --glass-pill: rgba(169, 169, 99, 0.12);
+      --glass-dock: rgba(22, 22, 24, 0.92);
+      --glass-border: rgba(169, 169, 99, 0.18);
+      --glass-stroke: rgba(169, 169, 99, 0.12);
+      --text-primary: #EFEFEB; --text-secondary: #9C9C93; --text-muted: #62625E;
+      --accent: #A9A963; --accent-2: #8A8A4B; --on-accent: #14140C;
+      --accent-glow: rgba(169, 169, 99, 0.26); --accent-soft: rgba(169, 169, 99, 0.15);
+      --green: #9CCC65; --green-soft: rgba(156, 204, 101, 0.16);
     }
     [data-theme="sand"] {
-      --bg-canvas: #072807; --bg-app: #0B3D0B;
-      --glass-card: rgba(14, 55, 14, 0.82);
-      --glass-pill: rgba(245, 230, 204, 0.10);
-      --glass-dock: rgba(10, 45, 10, 0.92);
-      --glass-border: rgba(245, 230, 204, 0.15);
-      --glass-stroke: rgba(245, 230, 204, 0.10);
-      --text-primary: #F5F2EA; --text-secondary: #B4BAAB; --text-muted: #747A6C;
-      --accent: #F5E6CC; --accent-glow: rgba(245, 230, 204, 0.26); --accent-soft: rgba(245, 230, 204, 0.14);
+      --bg-canvas: #062606; --bg-app: #0B3D0B;
+      --glass-card: rgba(17, 60, 17, 0.80);
+      --glass-pill: rgba(245, 230, 204, 0.12);
+      --glass-dock: rgba(8, 41, 8, 0.92);
+      --glass-border: rgba(245, 230, 204, 0.18);
+      --glass-stroke: rgba(245, 230, 204, 0.12);
+      --text-primary: #F2F3EA; --text-secondary: #ADB5A4; --text-muted: #6C7563;
+      --accent: #F5E6CC; --accent-2: #DCCEB2; --on-accent: #1F2B16;
+      --accent-glow: rgba(245, 230, 204, 0.24); --accent-soft: rgba(245, 230, 204, 0.15);
       --green: #7BD88F; --green-soft: rgba(123, 216, 143, 0.16);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
@@ -125,7 +132,7 @@
       display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer;
     }
     .cat-pill.active {
-      background: linear-gradient(135deg, #FF5A1F, #FF7A45); color: #FFFFFF;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent);
       border-color: transparent; box-shadow: 0 4px 14px -3px var(--accent-glow);
     }
     .spec-tag {
@@ -150,7 +157,7 @@
     .btn-pill { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 12px; }
     .btn-large { height: 48px; width: 100%; border-radius: 16px; font-size: 14px; font-weight: 700; }
     .btn-accent {
-      background: linear-gradient(135deg, #FF5A1F, #FF7A45); color: #FFFFFF;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent);
       box-shadow: 0 8px 20px -6px var(--accent-glow);
     }
     .btn-stars-bot {
@@ -301,7 +308,7 @@
       if (u.photo_url) {
         return `<img src="${esc(u.photo_url)}" alt="" style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.25);" />`;
       }
-      return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, #FF5A1F, #FF7A45); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
+      return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
     }
 
     const savedThemeRaw = localStorage.getItem('dh_theme') || 'dark';
@@ -490,7 +497,7 @@ function lotCategory(title, desc) {
       { id: 'dark',   name: 'DealHunter', accent: '#FF5A1F', bg: '#0A0B0E' },
       { id: 'mint',   name: 'Мята',       accent: '#B2F2D8', bg: '#121A3A' },
       { id: 'forest', name: 'Лес',        accent: '#FFB38A', bg: '#1B4332' },
-      { id: 'olive',  name: 'Оливка',     accent: '#B5B565', bg: '#1C1C1E' },
+      { id: 'olive',  name: 'Оливка',     accent: '#8A8A4B', bg: '#1C1C1E' },
       { id: 'sand',   name: 'Тайга',      accent: '#F5E6CC', bg: '#0B3D0B' },
     ];
 
@@ -1071,7 +1078,7 @@ function lotCategory(title, desc) {
           <div class="top-header">
             <div class="row-between">
               <div style="display:flex; align-items:center; gap:8px;">
-                <div style="width:34px; height:34px; border-radius:11px; background:linear-gradient(135deg, #FF5A1F, #FF7A45); display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 4px 12px var(--accent-glow);">
+                <div style="width:34px; height:34px; border-radius:11px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); display:flex; align-items:center; justify-content:center; color:var(--on-accent); box-shadow:0 4px 12px var(--accent-glow);">
                   <i data-lucide="radar" style="width:18px; height:18px;"></i>
                 </div>
                 <div>
