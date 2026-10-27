@@ -545,9 +545,14 @@ def find_with_model_deals(all_lots, rate: float):
             sold_ton, sold_n = model_sold_fair(mlots, median)
             rar = parse_model_rarity(model)
 
-            def push(venue, li, fair, src_i, pct_need, net_need):
+            def push(venue, li, fair, src_i, pct_need, net_need, sold_ref=0.0):
                 if fair <= 0:
                     diag['нет_планки'] += 1
+                    return
+                # страховка для планки «перебей соседа»: если сосед-дороже-всех
+                # выглядит выбросом против реальных продаж модели — не верим
+                if sold_ref > 0 and fair > sold_ref * 1.6:
+                    diag['сосед_выброс'] += 1
                     return
                 gross_rub = rate * (fair - li["price_ton"])
                 fees_rub = rate * fair * RESELL_FEE_PCT / 100.0
@@ -609,7 +614,7 @@ def find_with_model_deals(all_lots, rate: float):
                     # планка = живой сосед того же фона, чуть выше которого нельзя продать
                     fair_b = same_bg[1]
                     src_i = "перебил соседа"
-                    push(l["venue"], l, fair_b, src_i, DEAL_PCT_B, MIN_NET_RUB)
+                    push(l["venue"], l, fair_b, src_i, DEAL_PCT_B, MIN_NET_RUB, sold_ton)
 
             # ---------- C: строго по продажам ----------
             for method in ("C",):
