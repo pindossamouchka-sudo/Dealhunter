@@ -8,3 +8,4 @@ avito_live.html
 __pycache__/
 *.session
 *.log
+.venv/
