@@ -32,13 +32,58 @@
       --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.38); --accent-soft: rgba(255, 90, 31, 0.17);
       --green: #2AD16C; --green-soft: rgba(42, 209, 108, 0.16);
     }
+    /* Темы профиля: accent + фон (выбор: localStorage dh_theme) */
+    [data-theme="mint"] {
+      --bg-canvas: #0C1327; --bg-app: #121A3A;
+      --glass-card: rgba(30, 41, 74, 0.80);
+      --glass-pill: rgba(178, 242, 216, 0.08);
+      --glass-dock: rgba(18, 26, 54, 0.90);
+      --glass-border: rgba(178, 242, 216, 0.14);
+      --glass-stroke: rgba(178, 242, 216, 0.10);
+      --text-primary: #EDF6F2; --text-secondary: #9FB6AE; --text-muted: #64796F;
+      --accent: #B2F2D8; --accent-glow: rgba(178, 242, 216, 0.30); --accent-soft: rgba(178, 242, 216, 0.14);
+      --green: #4EE39C; --green-soft: rgba(78, 227, 156, 0.16);
+    }
+    [data-theme="forest"] {
+      --bg-canvas: #123024; --bg-app: #1B4332;
+      --glass-card: rgba(21, 52, 40, 0.82);
+      --glass-pill: rgba(255, 179, 138, 0.09);
+      --glass-dock: rgba(16, 44, 33, 0.92);
+      --glass-border: rgba(255, 179, 138, 0.14);
+      --glass-stroke: rgba(255, 179, 138, 0.10);
+      --text-primary: #F2F5F1; --text-secondary: #A8B8AC; --text-muted: #6C7D71;
+      --accent: #FFB38A; --accent-glow: rgba(255, 179, 138, 0.30); --accent-soft: rgba(255, 179, 138, 0.15);
+      --green: #34D399; --green-soft: rgba(52, 211, 153, 0.16);
+    }
+    [data-theme="olive"] {
+      --bg-canvas: #131315; --bg-app: #1C1C1E;
+      --glass-card: rgba(32, 32, 35, 0.82);
+      --glass-pill: rgba(138, 138, 75, 0.12);
+      --glass-dock: rgba(24, 24, 26, 0.92);
+      --glass-border: rgba(138, 138, 75, 0.18);
+      --glass-stroke: rgba(138, 138, 75, 0.12);
+      --text-primary: #F0F0EB; --text-secondary: #A6A697; --text-muted: #6E6E62;
+      --accent: #B5B565; --accent-glow: rgba(138, 138, 75, 0.32); --accent-soft: rgba(138, 138, 75, 0.18);
+      --green: #8BC34A; --green-soft: rgba(139, 195, 74, 0.16);
+    }
+    [data-theme="sand"] {
+      --bg-canvas: #072807; --bg-app: #0B3D0B;
+      --glass-card: rgba(14, 55, 14, 0.82);
+      --glass-pill: rgba(245, 230, 204, 0.10);
+      --glass-dock: rgba(10, 45, 10, 0.92);
+      --glass-border: rgba(245, 230, 204, 0.15);
+      --glass-stroke: rgba(245, 230, 204, 0.10);
+      --text-primary: #F5F2EA; --text-secondary: #B4BAAB; --text-muted: #747A6C;
+      --accent: #F5E6CC; --accent-glow: rgba(245, 230, 204, 0.26); --accent-soft: rgba(245, 230, 204, 0.14);
+      --green: #7BD88F; --green-soft: rgba(123, 216, 143, 0.16);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
     body {
       background: var(--bg-canvas); color: var(--text-primary);
       font-family: 'Inter', -apple-system, sans-serif;
       display: flex; justify-content: center; min-height: 100vh; overscroll-behavior-y: contain;
     }
-    .t-num { font-family: 'Manrope', 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
+    .t-num { font-family: 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
     .phone-shell {
       width: 100%; max-width: 430px; min-height: 100vh; background: var(--bg-app);
       position: relative; overflow-x: hidden; padding-bottom: 112px;
@@ -259,7 +304,8 @@
       return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, #FF5A1F, #FF7A45); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
     }
 
-    const savedTheme = localStorage.getItem('dh_theme') || 'dark';
+    const savedThemeRaw = localStorage.getItem('dh_theme') || 'dark';
+    const savedTheme = (savedThemeRaw === 'light' ? 'dark' : savedThemeRaw);
     document.documentElement.setAttribute('data-theme', savedTheme);
 
         const SELLER_CHECK = {
@@ -440,10 +486,24 @@ function lotCategory(title, desc) {
       if (profEl) profEl.textContent = formatCountdown(diff);
     }, 1000);
 
-    function toggleTheme() {
-      state.theme = state.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', state.theme);
-      localStorage.setItem('dh_theme', state.theme);
+    const THEMES = [
+      { id: 'dark',   name: 'DealHunter', accent: '#FF5A1F', bg: '#0A0B0E' },
+      { id: 'mint',   name: 'Мята',       accent: '#B2F2D8', bg: '#121A3A' },
+      { id: 'forest', name: 'Лес',        accent: '#FFB38A', bg: '#1B4332' },
+      { id: 'olive',  name: 'Оливка',     accent: '#B5B565', bg: '#1C1C1E' },
+      { id: 'sand',   name: 'Тайга',      accent: '#F5E6CC', bg: '#0B3D0B' },
+    ];
+
+    function applyTheme(id) {
+      if (!THEMES.some(t => t.id === id)) id = 'dark';
+      state.theme = id;
+      document.documentElement.setAttribute('data-theme', id);
+      try { localStorage.setItem('dh_theme', id); } catch (er) {}
+    }
+
+    function setThemeAction(id) {
+      applyTheme(id);
+      showToast('🎨 Тема: ' + (THEMES.find(t => t.id === id) || {}).name);
       render();
     }
 
@@ -705,7 +765,11 @@ function lotCategory(title, desc) {
       const val = el.getAttribute('data-val') || '';
 
       if (action === 'tab') { state.tab = val; state.detailId = null; render(); }
-      else if (action === 'theme') { toggleTheme(); }
+      else if (action === 'theme') {
+        const i = THEMES.findIndex(t => t.id === state.theme);
+        setThemeAction(THEMES[(i + 1) % THEMES.length].id);
+      }
+      else if (action === 'set-theme') { setThemeAction(val); }
       else if (action === 'refresh') { loadFeed(true); }
       else if (action === 'paywall') { state.showPaywall = true; render(); }
       else if (action === 'close-modal') {
@@ -1019,7 +1083,7 @@ function lotCategory(title, desc) {
                 ${timerBadgeHtml}
                 <button class="btn btn-icon" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
                 ${avatarHtml(30, 13)}
-                <button class="btn btn-icon" data-action="theme"><i data-lucide="${state.theme === 'dark' ? 'sun' : 'moon'}" style="width:15px; height:15px;"></i></button>
+                <button class="btn btn-icon" data-action="theme"><i data-lucide="palette" style="width:15px; height:15px;"></i></button>
               </div>
             </div>
 
@@ -1154,6 +1218,30 @@ function lotCategory(title, desc) {
                 <i data-lucide="sparkles" style="width:18px; height:18px;"></i>
                 <span>Пополнить Stars выгодно (BunnyStars)</span>
               </button>
+
+              <div class="glass-card" style="margin-top:14px;">
+                <div class="row-between" style="margin-bottom:10px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
+                      <i data-lucide="palette" style="width:17px; height:17px;"></i>
+                    </div>
+                    <div>
+                      <div style="font-size:15px; font-weight:800;">Оформление</div>
+                      <div style="font-size:11px; color:var(--text-secondary);">Выбери свою тему интерфейса</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:10px;">
+                  ${THEMES.map(t => `
+                    <button class="btn btn-pill ${state.theme === t.id ? 'btn-accent' : 'btn-glass'}" style="height:44px; padding:0 14px; display:flex; align-items:center; gap:9px;" data-action="set-theme" data-val="${t.id}">
+                      <span style="width:22px; height:22px; border-radius:50%; display:inline-flex; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.4); flex-shrink:0;">
+                        <span style="width:50%; height:100%; background:${t.accent}; display:inline-block;"></span><span style="width:50%; height:100%; background:${t.bg}; display:inline-block;"></span>
+                      </span>
+                      <span style="font-size:12px; font-weight:700;">${t.name}</span>
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
 
               <div style="margin-top:12px; text-align:center;">
                 <span data-action="show-promo" style="font-size:11px; color:var(--text-muted); cursor:pointer; text-decoration:underline dotted;">У меня есть код</span>

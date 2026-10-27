@@ -65,6 +65,13 @@ DEAL_PCT = 12.0
 RESELL_FEE_PCT = 10.0
 # Минимальная чистая прибыль в ₽ после вычета комиссий
 MIN_NET_RUB = 500
+
+# Методика B «перебей соседа»: скидка от живого соседа ≥ 15%
+DEAL_PCT_B = 15.0
+
+# Методика C «строго по продажам»: скидка ≥ 10%, чистыми ≥ 800 ₽
+DEAL_PCT_C = 10.0
+MIN_NET_C = 800
 # Минимальное число листингов в выборке модели, чтобы ей верить
 MIN_SAMPLES = 4
 # Антибот-пауза между запросами
@@ -251,7 +258,7 @@ def portals_fetch_pages(gift_name: str):
     got = portals_collection_id(gift_name)
     if not got:
         print(f"  [i] Portals: коллекция не найдена: {gift_name}")
-        return [], 0
+        return [], 0, False
     cid, coll = got
     out, pages_ok, complete_p = [], 0, False
     for p in range(PORTALS_PAGES):
@@ -502,9 +509,13 @@ def model_sold_fair(mlots, listing_median: float) -> tuple:
 # ---------------- Сравнение ----------------
 
 def find_with_model_deals(all_lots, rate: float):
-    """list[lot]: {venue, gift, model, rarity, backdrop, symbol, price_ton, fair_ton, gift_id, tg_id, gift_num}"""
+    """Три методики планки на одних данных, в пуш идёт лучшая:
+    A «продажи+соседи» — текущая гибридная (sold-avg, медиана, перебить соседа);
+    B «перебей соседа» — планка только живыми листингами того же фона, выход быстрый;
+    C «строго по продажам» — планка только реальными продажами (своего SKU + модели)."""
     st = load_state()
-    deals = []
+    deals = {"A": [], "B": [], "C": []}
+    sum_net = {"A": 0.0, "B": 0.0, "C": 0.0}
     import collections as _c
     diag = _c.Counter()
     for gift, lots in all_lots.items():
@@ -525,27 +536,54 @@ def find_with_model_deals(all_lots, rate: float):
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
-            # дешёвый прикид по листингам → для кандидатов уточняем реальную цену продаж;
-            # планка = МЕНЬШЕЕ из (продажи, медиана листингов):
-            # продать дороже текущих предложений нельзя, значит планка по минимальному
-            fair_ton = median
-            fair_src = "листинги"
-            cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= median * (100.0 - DEAL_PCT)]
-            if not cand_lots:
+            #итог sold-вызовы дороги: тянем данные продаж только если в группе
+            #есть дешёвые кандидаты под модели/продажи (для B они не нужны)
+            has_cheap = any(p * 100.0 <= median * (100.0 - min(DEAL_PCT, DEAL_PCT_C)) for p in prices)
+            if not has_cheap:
                 diag['дешёвых_нет'] += 1
-            if cand_lots:
-                sold_ton, sold_n = model_sold_fair(mlots, median)
+                continue
+            sold_ton, sold_n = model_sold_fair(mlots, median)
+            rar = parse_model_rarity(model)
+
+            def push(venue, li, fair, src_i, pct_need, net_need):
+                if fair <= 0:
+                    diag['нет_планки'] += 1
+                    return
+                gross_rub = rate * (fair - li["price_ton"])
+                fees_rub = rate * fair * RESELL_FEE_PCT / 100.0
+                net_rub = gross_rub - fees_rub
+                if li["price_ton"] * 100.0 > fair * (100.0 - pct_need):
+                    diag['скидки_нет'] += 1
+                    return
+                if net_rub < net_need:
+                    diag['мелко'] += 1
+                    return
+                d = {
+                    "gift": gift, "model": model, "rarity": rar,
+                    "price_ton": li["price_ton"], "fair_ton": fair,
+                    "fair_src": src_i,
+                    "venue": li["venue"], "backdrop": li["backdrop"],
+                    "symbol": li["symbol"], "gift_id": li.get("gift_id", ""),
+                    "gift_num": li.get("gift_num", ""),
+                    "tg_id": li.get("tg_id", ""),
+                    "portals_id": li.get("id", ""),
+                    "net_rub": round(net_rub),
+                    "floors": floors,
+                }
+                deals[method].append(d)
+
+            # ---------- A: гибрид (как раньше) ----------
+            for method in ("A",):
+                fair_ton = median
+                fair_src = "листинги"
                 if sold_ton > 0:
                     fair_ton = min(sold_ton, median)
                     fair_src = f"продажи Portals ({sold_n})"
-                # для каждого кандидата уточняем планку по СВОЕМУ SKU (частное
-                #_artist backdrop): его реальная цена продажи важнее модели
+                cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= fair_ton * (100.0 - DEAL_PCT)]
                 refined = []
                 for l in cand_lots:
                     f_i = fair_ton
                     src_i = fair_src
-                    # надо перебить ЖИВОЕ предложение того же фона: планка по
-                    # второму-снизу его списку (сам кандидат — самый дешёвый)
                     same_bg = sorted(l2["price_ton"] for l2 in mlots if l2["backdrop"] == l["backdrop"])
                     if len(same_bg) >= 2:
                         second = same_bg[1] if l["price_ton"] <= same_bg[0] else same_bg[0]
@@ -559,35 +597,63 @@ def find_with_model_deals(all_lots, rate: float):
                             f_i = own_avg
                             src_i = "свой SKU"
                     if l["price_ton"] * 100.0 <= f_i * (100.0 - DEAL_PCT):
-                        l["_fair_ton"] = f_i
-                        l["_fair_src"] = src_i
+                        push(l["venue"], l, f_i, src_i, DEAL_PCT, MIN_NET_RUB)
                         refined.append(l)
-                cand_lots = refined
-            if fair_ton <= 0 or not cand_lots:
-                diag['отсеяно_планкой'] += 1
-                continue
-            for l in cand_lots:
-                f_i = l.get("_fair_ton", fair_ton)
-                gross_rub = rate * (f_i - l["price_ton"])
-                fees_rub = rate * f_i * RESELL_FEE_PCT / 100.0
-                net_rub = gross_rub - fees_rub
-                if net_rub < MIN_NET_RUB:
-                    continue  # мелкие скидки не перекрывают комиссии
-                rar = parse_model_rarity(model)
-                deals.append({
-                    "gift": gift, "model": model, "rarity": rar,
-                    "price_ton": l["price_ton"], "fair_ton": f_i,
-                    "fair_src": l.get("_fair_src", fair_src),
-                    "venue": l["venue"], "backdrop": l["backdrop"],
-                    "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
-                    "gift_num": l.get("gift_num", ""),
-                    "tg_id": l.get("tg_id", ""),
-                    "portals_id": l.get("id", ""),
-                    "net_rub": round(net_rub),
-                    "floors": floors,
-                })
+
+            # ---------- B: перебей живого соседа ----------
+            for method in ("B",):
+                for l in mlots:
+                    same_bg = sorted(l2["price_ton"] for l2 in mlots if l2["backdrop"] == l["backdrop"])
+                    if len(same_bg) < 2 or l["price_ton"] > same_bg[0]:
+                        continue  # не самый дешёвый своего фона — перебить нельзя
+                    # планка = живой сосед того же фона, чуть выше которого нельзя продать
+                    fair_b = same_bg[1]
+                    src_i = "перебил соседа"
+                    push(l["venue"], l, fair_b, src_i, DEAL_PCT_B, MIN_NET_RUB)
+
+            # ---------- C: строго по продажам ----------
+            for method in ("C",):
+                if sold_ton <= 0:
+                    continue
+                for l in mlots:
+                    # планка = продажи SKU той же модели; кандидат обязан быть
+                    # дешевле планки, иначе sold-вызов не делаем (их и так сотни)
+                    if l["price_ton"] * 100.0 > sold_ton * (100.0 - DEAL_PCT_C):
+                        continue
+                    f_i = sold_ton
+                    src_i = f"продажи SKU ({sold_n})"
+                    own = l.get("id") if l.get("venue") == "Portals" else ""
+                    if own:
+                        own_avg = portals_sold_avg(own)
+                        if own_avg > 0 and own_avg < f_i:
+                            f_i = own_avg
+                            src_i = "свой SKU"
+                    push(l["venue"], l, f_i, src_i, DEAL_PCT_C, MIN_NET_C)
+
+    # сводка: считаем только уникальные (venue|backdrop|num) сделки между методиками
+    summary = {}
+    for method in ("A", "B", "C"):
+        uniq = {}
+        for d in deals[method]:
+            k = (d["venue"], d["backdrop"], d["gift_num"])
+            if k not in uniq or d["net_rub"] > uniq[k]["net_rub"]:
+                uniq[k] = d
+        deals[method] = list(uniq.values())
+        sum_net[method] = sum(d["net_rub"] for d in deals[method])
+        summary[method] = (len(deals[method]), sum_net[method])
+    print("[методики] " + "; ".join(
+        f"{m}: {summary[m][0]} сделок, ЧП {int(sum_net[m]):,} ₽".replace(",", " ")
+        for m in ("A", "B", "C")))
+    best = max(("A", "B", "C"), key=lambda m: (sum_net[m], len(deals[m])))
+    print(f"[методики] лучшая: {best} → варки: {', '.join(sorted(set(d['fair_src'] for d in deals[best]))) if deals[best] else 'пусто'}")
+    diag['сделок_' + best] = len(deals[best])
     print('[diag]', dict(diag))
-    return deals
+    final = []
+    for d in deals[best]:
+        d["made_by"] = best
+        final.append(d)
+    final.sort(key=lambda d: -d["net_rub"])
+    return final[:20]
 
 
 def lot_url(d: dict) -> str:
