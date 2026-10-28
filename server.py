@@ -831,9 +831,16 @@ async def fetch_db_external_lots(
             "DELETE FROM dh_lots WHERE source = 'TG' AND title ~* '^([\\W_]+)?(купл|ищу|предложите|нужен|спрос)'"
         )
         total_ext = await conn.fetchval("SELECT COUNT(*) FROM dh_lots")
-        rows = await conn.fetch(
-            "SELECT * FROM dh_lots WHERE gone = FALSE ORDER BY created_at DESC LIMIT 100"
-        )
+        if source and source.lower() != "all":
+            rows = await conn.fetch(
+                "SELECT * FROM dh_lots WHERE gone = FALSE AND LOWER(source) = LOWER($1) "
+                "ORDER BY created_at DESC LIMIT 100",
+                source,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM dh_lots WHERE gone = FALSE ORDER BY created_at DESC LIMIT 100"
+            )
 
     results = []
     try:
@@ -842,8 +849,6 @@ async def fetch_db_external_lots(
         tg_floor_for = None
     q_words = [w.lower() for w in search_query.split() if len(w) >= 2]
     for r in rows:
-        if source != "all" and r["source"].lower() != source.lower():
-            continue
         if r["source"] == "TG":
             tl = re.sub(r"^[\W_]+", "", r["title"]).lower()
             floor = tg_floor_for(tl) if tg_floor_for else 900

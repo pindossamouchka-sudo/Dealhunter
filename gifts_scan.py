@@ -18,7 +18,6 @@ import sys
 import time
 import json
 import random
-import statistics
 from datetime import datetime
 from pathlib import Path
 
@@ -72,8 +71,8 @@ DEAL_PCT_B = 15.0
 # Методика C «строго по продажам»: скидка ≥ 10%, чистыми ≥ 800 ₽
 DEAL_PCT_C = 10.0
 MIN_NET_C = 800
-# Минимальное число листингов в выборке модели, чтобы ей верить
-MIN_SAMPLES = 4
+# Минимальное число листингов в выборке модели, чтобы сравнить с соседом
+MIN_SAMPLES = 2
 # Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
 # Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
@@ -447,62 +446,55 @@ def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
 # ---------------- Оценка ----------------
-# Правила (ТЗ):
-# 1) флор именно по МОДЕЛИ (а не по коллекции), та же валюта, что цена лота (TON);
-# 2) discount = (floor_model - price) / floor_model;
-# 3) чистая цена продажи = floor_model * (1 - комиссия маркета), профит = чистая - покупка;
-# 4) выгодный = discount >= 10% И профит > 0;
-# 5) цена >= флора -> отбросить;
-# 6) редкость модели/фона/символа < 2% -> "редкий", планка выше флора (премия);
-# 7) флор старше 10 минут -> устарел, пересчитать перед оценкой;
-# 8) причина у сделки: "-15% от флора" или "редкий фон".
+# Правило «следующего лота»:
+# 1) референс лота = минимальная цена ДРУГИХ лотов той же модели (сам лот не учитываем),
+#    в той же валюте, что цена лота (TON);
+# 2) discount = (reference - price) / reference;
+# 3) чистая цена продажи = reference * (1 - комиссия маркета 10%), профит = чистая - покупка;
+# 4) выгодный = цена <= reference * 0.90 И профит > 0;
+# 5) редкость модели/фона/символа < 2% — отдельная метка (на планку не влияет);
+# 6) причина у сделки: "-N% от следующего лота".
 
-FLOOR_TTL_SEC = 600.0      # правило 7: TTL флора модели
-RARE_PCT = 2.0             # правило 6: порог редкости (%)
-RARE_PREMIUM = 1.25        # "оценивать выше флора": планка редкого = флор x премия
+RARE_PCT = 2.0             # порог редкости модели/фона/символа (%)
 
 
-def get_model_floor(mlots, model, cached=None, now=None):
-    """Справедливая планка по МОДЕЛИ (в той же валюте, что цена — TON).
+def get_model_floor(mlots, model, exclude_lot=None):
+    """Референс лота = минимальная цена ДРУГИХ лотов той же модели (TON).
 
-    Реальных продаж Portals API не отдаёт (activity закрыт), поэтому планка —
-    медианная цена модели по рынку: надёжная оценка «справедливой цены» группы,
-    дешёвые лоты могут быть и ниже неё. Минимум листингов не годится —
-    тогда ничего не бывает дешевле флора и фильтр всегда даёт 0.
-    cached={'value': float, 'ts': float}: свежий (<FLOOR_TTL_SEC = 10 мин) —
-    из кеша, иначе пересчёт (правило 7).
-    Возвращает (floor, возраст_сек, пересчитан). Нет данных -> floor=0 («нет флора»)."""
-    now = now if now is not None else time.time()
-    if cached and cached.get("value", 0) > 0 and (now - cached.get("ts", 0)) <= FLOOR_TTL_SEC:
-        return float(cached["value"]), now - cached["ts"], False
-    prices = [l["price_ton"] for l in mlots if l.get("model") == model and l.get("price_ton", 0) > 0]
-    if len(prices) < 2:
-        return 0.0, 0.0, True
-    return float(statistics.median(prices)), 0.0, True
+    Сам лот исключается: иначе он не может быть дешевле собственной цены.
+    Так «флор по модели» — это следующий по дешевизне сосед, а не минимум,
+    в который всегда попадает проверяемый лот.
+    Нет других лотов -> 0.0 (причина «нет флора»)."""
+    prices = [
+        l["price_ton"]
+        for l in mlots
+        if l is not exclude_lot
+        and l.get("model") == model
+        and l.get("price_ton", 0) > 0
+    ]
+    return float(min(prices)) if prices else 0.0
 
 
-def evaluate_lot(price_ton: float, floor_model: float, rate: float,
-                 rare: str = "", fee_pct: float = None,
-                 premium: float = None, min_discount: float = 0.10):
-    """Чистая оценка одного лота по правилам 2-6/8. None -> лот отбросить."""
-    if floor_model is None or floor_model <= 0 or price_ton is None or price_ton <= 0:
+def evaluate_lot(price_ton: float, reference_ton: float, rate: float,
+                 fee_pct: float = None, min_discount: float = 0.10):
+    """Чистая оценка лота по правилу «следующего лота»:
+    цена <= референс * 0.90 И профит после комиссии 10% > 0. None -> отбросить.
+    reference_ton — минимальная цена ДРУГОГО лота той же модели."""
+    if not reference_ton or reference_ton <= 0 or not price_ton or price_ton <= 0:
         return None
     fee_pct = RESELL_FEE_PCT if fee_pct is None else fee_pct
-    premium = RARE_PREMIUM if premium is None else premium
-    floor_eff = floor_model * premium if rare else floor_model
-    if price_ton >= floor_eff:  # правило 5 (для редких планка — floor_eff)
+    if price_ton > reference_ton * (1.0 - min_discount) + 1e-9:
         return None
-    discount = (floor_eff - price_ton) / floor_eff
-    if discount + 1e-9 < min_discount:  # правило 4
-        return None
-    net_sell = floor_eff * (1.0 - fee_pct / 100.0)  # правило 3
+    discount = (reference_ton - price_ton) / reference_ton
+    net_sell = reference_ton * (1.0 - fee_pct / 100.0)
     profit_ton = net_sell - price_ton
     if profit_ton <= 0:
         return None
-    reason = rare if rare else "-%d%% от флора" % round(discount * 100)
+    reason = "-%d%% от следующего лота" % round(discount * 100)
     return {
-        "floor_model": floor_model,
-        "fair_ton": floor_eff,
+        "floor_model": reference_ton,
+        "reference_ton": reference_ton,
+        "fair_ton": reference_ton,
         "discount": round(discount, 3),
         "profit_ton": round(profit_ton, 2),
         "profit_rub": round(profit_ton * rate),
@@ -529,23 +521,18 @@ def rare_reason(model: str, lot: dict, mlots: list):
     return ""
 
 
-def reject_reason(price_ton, floor_model, rare, fee_pct=None,
-                  premium=None, min_discount=0.10):
-    """Почему лот бракуется (для отладочного лога). Причины по ТЗ:
+def reject_reason(price_ton, reference_ton, fee_pct=None, min_discount=0.10):
+    """Почему лот бракуется (для отладочного лога):
     нет флора / цена >= флора / скидка < порога / профит <= 0."""
-    if floor_model is None or floor_model <= 0:
+    if reference_ton is None or reference_ton <= 0:
         return "нет флора"
-    fee_pct = RESELL_FEE_PCT if fee_pct is None else fee_pct
-    premium = RARE_PREMIUM if premium is None else premium
-    floor_eff = floor_model * premium if rare else floor_model
     if price_ton is None or price_ton <= 0:
         return "нет цены"
-    if price_ton >= floor_eff:
+    if price_ton >= reference_ton:
         return "цена >= флора"
-    discount = (floor_eff - price_ton) / floor_eff
-    if discount + 1e-9 < min_discount:
+    if price_ton > reference_ton * (1.0 - min_discount) + 1e-9:
         return "скидка < порога"
-    net_sell = floor_eff * (1.0 - fee_pct / 100.0)
+    net_sell = reference_ton * (1.0 - (RESELL_FEE_PCT if fee_pct is None else fee_pct) / 100.0)
     if net_sell - price_ton <= 0:
         return "профит <= 0"
     return "?"
@@ -554,11 +541,11 @@ def reject_reason(price_ton, floor_model, rare, fee_pct=None,
 REJECT_LOG = False  # включается в --debug-reject
 
 
-def debug_reject_line(gift, model, l, floor_model, rare, reason):
-    fl = ("НЕТ ФЛОРА" if not floor_model or floor_model <= 0 else "%.2f TON" % floor_model)
-    if floor_model and floor_model > 0:
-        prem = RARE_PREMIUM if rare else 1.0
-        d = (floor_model * prem - l["price_ton"]) / (floor_model * prem) * 100.0
+def debug_reject_line(gift, model, l, reference_ton, reason):
+    fl = ("НЕТ ФЛОРА" if not reference_ton or reference_ton <= 0
+          else "%.2f TON" % reference_ton)
+    if reference_ton and reference_ton > 0:
+        d = (reference_ton - l["price_ton"]) / reference_ton * 100.0
         ds = "%+.1f%%" % d
     else:
         ds = "—"
@@ -567,16 +554,14 @@ def debug_reject_line(gift, model, l, floor_model, rare, reason):
 
 
 def find_with_model_deals(all_lots, rate: float):
-    """Оценка по правилам ТЗ: флор модели -> discount/профит -> причины.
-    Флоры хранятся в реестре state['model_floors'][gift|model] = {value, ts};
-    свежий (<10 мин) — из кеша, устаревший — пересчёт (правило 7)."""
+    """Оценка по правилу «следующего лота»: для каждого лота референс —
+    минимальная цена ДРУГИХ лотов той же модели. Сделка: цена <= референс*0.9
+    и профит после комиссии 10% > 0. Референс считается из текущего скана,
+    поэтому он всегда свежий (не старше 10 минут)."""
     import collections as _c
     diag = _c.Counter()
     reject_cnt = _c.Counter()
     deals = []
-    st = load_state()
-    floors_reg = dict(st.get("model_floors") or {})
-    now = time.time()
     for gift, lots in all_lots.items():
         diag['lots'] += len(lots)
         by_model = {}
@@ -587,47 +572,39 @@ def find_with_model_deals(all_lots, rate: float):
             if len(mlots) < MIN_SAMPLES:
                 diag['мало_образцов'] += 1
                 continue
-            # правило 7: свежий флор из кеша, устаревший — пересчитать
-            key = f"{gift}|{model}"
-            cached = floors_reg.get(key)
-            floor_model, age, recomputed = get_model_floor(mlots, model, cached=cached, now=now)
-            if not recomputed:
-                diag['флор_из_кеша'] += 1
-            if floor_model <= 0:
+            prices = sorted(l["price_ton"] for l in mlots if l.get("price_ton", 0) > 0)
+            if len(prices) < 2:
                 diag['флора_нет'] += 1
-                if cached and (now - cached.get("ts", 0)) > FLOOR_TTL_SEC and REJECT_LOG:
-                    print("[отбраковано] %s | %s | floor=УСТАРЕЛ(%.0fс) | причина: флор устарел и пересчёт не удался"
-                          % (gift, model, now - cached.get("ts", 0)))
                 continue
-            floors_reg[key] = {"value": floor_model, "ts": now}
-            # диагностика глубины рынка: макс скидка внутри группы
-            dscs = [(floor_model - l["price_ton"]) / floor_model for l in mlots]
-            if dscs:
-                top = max(dscs)
-                if top >= 0.10:
-                    diag['макс_скидка_>=10'] += 1
-                elif top >= 0.05:
-                    diag['макс_скидка_>=5'] += 1
-                elif top > 0:
-                    diag['макс_скидка_<5'] += 1
+            # диагностика: разрыв между двумя самыми дешёвыми лотами модели
+            gap = (prices[1] - prices[0]) / prices[1] if prices[1] > 0 else 0.0
+            if gap >= 0.10:
+                diag['макс_скидка_>=10'] += 1
+            elif gap >= 0.05:
+                diag['макс_скидка_>=5'] += 1
+            else:
+                diag['макс_скидка_<5'] += 1
             rar = parse_model_rarity(model)
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
             for l in mlots:
+                # референс: минимум ДРУГИХ лотов модели (сам лот не учитываем)
+                reference_ton = get_model_floor(mlots, model, exclude_lot=l)
                 rare = rare_reason(model, l, mlots)
-                res = evaluate_lot(l["price_ton"], floor_model, rate, rare=rare)
+                res = evaluate_lot(l["price_ton"], reference_ton, rate)
                 if not res:
-                    reason = reject_reason(l["price_ton"], floor_model, rare)
+                    reason = reject_reason(l["price_ton"], reference_ton)
                     reject_cnt[reason] += 1
                     if REJECT_LOG:
-                        debug_reject_line(gift, model, l, floor_model, rare, reason)
+                        debug_reject_line(gift, model, l, reference_ton, reason)
                     diag['отброшено'] += 1
                     continue
                 d = {
                     "gift": gift, "model": model, "rarity": rar,
                     "price_ton": l["price_ton"], "fair_ton": res["fair_ton"],
-                    "fair_src": res["reason"],
+                    "reference_ton": res["reference_ton"],
+                    "fair_src": res["reason"], "rare": rare,
                     "venue": l["venue"], "backdrop": l["backdrop"],
                     "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
                     "gift_num": l.get("gift_num", ""),
@@ -638,11 +615,6 @@ def find_with_model_deals(all_lots, rate: float):
                 }
                 deals.append(d)
     diag['сделок'] = len(deals)
-    st["model_floors"] = floors_reg
-    try:
-        save_state(st)
-    except Exception as e:
-        print(f"[!] реестр флоров не сохранён: {type(e).__name__}")
     print('[diag]', dict(diag))
     if reject_cnt:
         print('[отбраковано по причинам]', dict(reject_cnt))
