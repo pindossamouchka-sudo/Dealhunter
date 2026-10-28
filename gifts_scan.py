@@ -523,10 +523,48 @@ def rare_reason(model: str, lot: dict, mlots: list):
     return ""
 
 
+def reject_reason(price_ton, floor_model, rare, fee_pct=None,
+                  premium=None, min_discount=0.10):
+    """Почему лот бракуется (для отладочного лога). Причины по ТЗ:
+    нет флора / цена >= флора / скидка < порога / профит <= 0."""
+    if floor_model is None or floor_model <= 0:
+        return "нет флора"
+    fee_pct = RESELL_FEE_PCT if fee_pct is None else fee_pct
+    premium = RARE_PREMIUM if premium is None else premium
+    floor_eff = floor_model * premium if rare else floor_model
+    if price_ton is None or price_ton <= 0:
+        return "нет цены"
+    if price_ton >= floor_eff:
+        return "цена >= флора"
+    discount = (floor_eff - price_ton) / floor_eff
+    if discount + 1e-9 < min_discount:
+        return "скидка < порога"
+    net_sell = floor_eff * (1.0 - fee_pct / 100.0)
+    if net_sell - price_ton <= 0:
+        return "профит <= 0"
+    return "?"
+
+
+REJECT_LOG = False  # включается в --debug-reject
+
+
+def debug_reject_line(gift, model, l, floor_model, rare, reason):
+    fl = ("НЕТ ФЛОРА" if not floor_model or floor_model <= 0 else "%.2f TON" % floor_model)
+    if floor_model and floor_model > 0:
+        prem = RARE_PREMIUM if rare else 1.0
+        d = (floor_model * prem - l["price_ton"]) / (floor_model * prem) * 100.0
+        ds = "%+.1f%%" % d
+    else:
+        ds = "—"
+    print("[отбраковано] %s | %s | %.2f TON | floor=%s | disc=%s | причина: %s"
+          % (gift, model, l["price_ton"], fl, ds, reason))
+
+
 def find_with_model_deals(all_lots, rate: float):
     """Оценка по правилам ТЗ: флор модели -> discount/профит -> причины."""
     import collections as _c
     diag = _c.Counter()
+    reject_cnt = _c.Counter()
     deals = []
     for gift, lots in all_lots.items():
         diag['lots'] += len(lots)
@@ -545,6 +583,16 @@ def find_with_model_deals(all_lots, rate: float):
             if floor_model <= 0:
                 diag['флора_нет'] += 1
                 continue
+            # диагностика глубины рынка: макс скидка внутри группы
+            dscs = [(floor_model - l["price_ton"]) / floor_model for l in mlots]
+            if dscs:
+                top = max(dscs)
+                if top >= 0.10:
+                    diag['макс_скидка_>=10'] += 1
+                elif top >= 0.05:
+                    diag['макс_скидка_>=5'] += 1
+                elif top > 0:
+                    diag['макс_скидка_<5'] += 1
             rar = parse_model_rarity(model)
             floors = {}
             for l in mlots:
@@ -553,6 +601,10 @@ def find_with_model_deals(all_lots, rate: float):
                 rare = rare_reason(model, l, mlots)
                 res = evaluate_lot(l["price_ton"], floor_model, rate, rare=rare)
                 if not res:
+                    reason = reject_reason(l["price_ton"], floor_model, rare)
+                    reject_cnt[reason] += 1
+                    if REJECT_LOG:
+                        debug_reject_line(gift, model, l, floor_model, rare, reason)
                     diag['отброшено'] += 1
                     continue
                 d = {
@@ -570,6 +622,8 @@ def find_with_model_deals(all_lots, rate: float):
                 deals.append(d)
     diag['сделок'] = len(deals)
     print('[diag]', dict(diag))
+    if reject_cnt:
+        print('[отбраковано по причинам]', dict(reject_cnt))
     deals.sort(key=lambda d: -d["net_rub"])
     if len(deals) > 40:
         deals = deals[:40]
@@ -756,6 +810,13 @@ def main():
         venue_f = len(f_lots)
         ok.append((gift, len(total), venue_t, venue_p))
         print(f"  {gift}: {len(total)} лотов (Tonnel {venue_t} / Portals {venue_p} / Fragment {venue_f})")
+    try:
+        Path("gifts_snapshot.json").write_text(
+            json.dumps({"ts": datetime.utcnow().isoformat() + "Z", "rate": rate,
+                        "all_lots": {k: v for k, v in all_lots.items()}},
+                       ensure_ascii=False), "utf-8")
+    except Exception as e:
+        print(f"[!] снапшот не сохранён: {type(e).__name__}")
     deals = find_with_model_deals(all_lots, rate)
     # за прогон не спамим ленту: топ-20 по размеру скидки, уникально по (gift|model|venue)
     deals.sort(key=lambda d: 1 - d["price_ton"] / d["fair_ton"])
@@ -778,5 +839,40 @@ def main():
         print(f"пуш: off (--no-push), лотов к пушу: {len(lots)}")
 
 
+def debug_reject_run(n: int = 50):
+    """Отладка фильтра на первых N лотах снапшота — без сети.
+    На каждый отброшенный лот одна строка + счётчик причин."""
+    global REJECT_LOG
+    REJECT_LOG = True
+    snap_file = Path("gifts_snapshot.json")
+    if not snap_file.exists():
+        print("[!] нет gifts_snapshot.json — сначала сделай обычный прогон")
+        return
+    snap = json.loads(snap_file.read_text("utf-8"))
+    rate = float(snap.get("rate") or 0)
+    if rate <= 0:
+        rate = ton_rub_rate()
+    print(f"[debug] снапшот от {snap.get('ts')} курс {rate:.1f} ₽/TON", "| лотов в снапшоте:",
+          sum(len(v) for v in snap["all_lots"].values()))
+    budget = max(0, int(n))
+    all_lots = {}
+    for gift, lots in snap["all_lots"].items():
+        if budget <= 0:
+            break
+        take = lots[:budget]
+        all_lots[gift] = take
+        budget -= len(take)
+    print(f"[debug] взяли {sum(len(v) for v in all_lots.values())} лотов")
+    deals = find_with_model_deals(all_lots, rate)
+    print(f"[debug] прошло фильтр: {len(deals)} из {sum(len(v) for v in all_lots.values())}")
+    for d in deals[:5]:
+        print("  [взят] %s | %s | %.2f TON | %s | +%.0f ₽" % (d["gift"], d["model"], d["price_ton"], d["fair_src"], d["net_rub"]))
+
+
 if __name__ == "__main__":
-    main()
+    idx = sys.argv.find("--debug-reject") if hasattr(sys.argv, "find") else -1
+    n = int(sys.argv[idx + 1]) if idx >= 0 and idx + 1 < len(sys.argv) and sys.argv[idx + 1].isdigit() else 50
+    if idx >= 0:
+        debug_reject_run(n)
+    else:
+        main()
