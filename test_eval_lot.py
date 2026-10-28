@@ -56,7 +56,7 @@ mlots = [
     {"model": "Test (1%)", "price_ton": 110.0},
 ]
 floor, age, recomputed = gs.get_model_floor(mlots, "Test (1%)", cached=cached_old, now=time.time())
-case("правило 7: флор старше 10 мин пересчитывается (100->92)", recomputed and abs(floor - 92.0) < 1e-9)
+case("правило 7: флор старше 10 мин пересчитывается (кеш 100 -> медиана 101)", recomputed and abs(floor - 101.0) < 1e-9)
 
 # свежий кеш (2 мин) не пересчитывается
 cached_new = {"value": 100.0, "ts": time.time() - 120.0}

@@ -463,16 +463,22 @@ RARE_PREMIUM = 1.25        # "оценивать выше флора": план�
 
 
 def get_model_floor(mlots, model, cached=None, now=None):
-    """Флор по МОДЕЛИ из текущих листингов. cached={'value': float, 'ts': float}.
-    Возвращает (floor, возраст_сек, пересчитан). Флор старше FLOOR_TTL_SEC — устарел."""
+    """Справедливая планка по МОДЕЛИ (в той же валюте, что цена — TON).
+
+    Реальных продаж Portals API не отдаёт (activity закрыт), поэтому планка —
+    медианная цена модели по рынку: надёжная оценка «справедливой цены» группы,
+    дешёвые лоты могут быть и ниже неё. Минимум листингов не годится —
+    тогда ничего не бывает дешевле флора и фильтр всегда даёт 0.
+    cached={'value': float, 'ts': float}: свежий (<FLOOR_TTL_SEC = 10 мин) —
+    из кеша, иначе пересчёт (правило 7).
+    Возвращает (floor, возраст_сек, пересчитан). Нет данных -> floor=0 («нет флора»)."""
     now = now if now is not None else time.time()
     if cached and cached.get("value", 0) > 0 and (now - cached.get("ts", 0)) <= FLOOR_TTL_SEC:
         return float(cached["value"]), now - cached["ts"], False
-    prices = [l["price_ton"] for l in mlots
-              if l.get("model") == model and l.get("price_ton", 0) > 0]
-    if not prices:
+    prices = [l["price_ton"] for l in mlots if l.get("model") == model and l.get("price_ton", 0) > 0]
+    if len(prices) < 2:
         return 0.0, 0.0, True
-    return min(prices), 0.0, True
+    return float(statistics.median(prices)), 0.0, True
 
 
 def evaluate_lot(price_ton: float, floor_model: float, rate: float,
@@ -561,11 +567,16 @@ def debug_reject_line(gift, model, l, floor_model, rare, reason):
 
 
 def find_with_model_deals(all_lots, rate: float):
-    """Оценка по правилам ТЗ: флор модели -> discount/профит -> причины."""
+    """Оценка по правилам ТЗ: флор модели -> discount/профит -> причины.
+    Флоры хранятся в реестре state['model_floors'][gift|model] = {value, ts};
+    свежий (<10 мин) — из кеша, устаревший — пересчёт (правило 7)."""
     import collections as _c
     diag = _c.Counter()
     reject_cnt = _c.Counter()
     deals = []
+    st = load_state()
+    floors_reg = dict(st.get("model_floors") or {})
+    now = time.time()
     for gift, lots in all_lots.items():
         diag['lots'] += len(lots)
         by_model = {}
@@ -576,13 +587,19 @@ def find_with_model_deals(all_lots, rate: float):
             if len(mlots) < MIN_SAMPLES:
                 diag['мало_образцов'] += 1
                 continue
-            # правило 7: флор модели всегда пересчитываем из свежих листингов
-            floor_model, _, recomputed = get_model_floor(mlots, model)
+            # правило 7: свежий флор из кеша, устаревший — пересчитать
+            key = f"{gift}|{model}"
+            cached = floors_reg.get(key)
+            floor_model, age, recomputed = get_model_floor(mlots, model, cached=cached, now=now)
             if not recomputed:
                 diag['флор_из_кеша'] += 1
             if floor_model <= 0:
                 diag['флора_нет'] += 1
+                if cached and (now - cached.get("ts", 0)) > FLOOR_TTL_SEC and REJECT_LOG:
+                    print("[отбраковано] %s | %s | floor=УСТАРЕЛ(%.0fс) | причина: флор устарел и пересчёт не удался"
+                          % (gift, model, now - cached.get("ts", 0)))
                 continue
+            floors_reg[key] = {"value": floor_model, "ts": now}
             # диагностика глубины рынка: макс скидка внутри группы
             dscs = [(floor_model - l["price_ton"]) / floor_model for l in mlots]
             if dscs:
@@ -621,6 +638,11 @@ def find_with_model_deals(all_lots, rate: float):
                 }
                 deals.append(d)
     diag['сделок'] = len(deals)
+    st["model_floors"] = floors_reg
+    try:
+        save_state(st)
+    except Exception as e:
+        print(f"[!] реестр флоров не сохранён: {type(e).__name__}")
     print('[diag]', dict(diag))
     if reject_cnt:
         print('[отбраковано по причинам]', dict(reject_cnt))
@@ -870,9 +892,10 @@ def debug_reject_run(n: int = 50):
 
 
 if __name__ == "__main__":
-    idx = sys.argv.find("--debug-reject") if hasattr(sys.argv, "find") else -1
-    n = int(sys.argv[idx + 1]) if idx >= 0 and idx + 1 < len(sys.argv) and sys.argv[idx + 1].isdigit() else 50
-    if idx >= 0:
+    args = list(sys.argv[1:])
+    if "--debug-reject" in args:
+        i = args.index("--debug-reject")
+        n = int(args[i + 1]) if i + 1 < len(args) and args[i + 1].isdigit() else 50
         debug_reject_run(n)
     else:
         main()
