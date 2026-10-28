@@ -780,6 +780,37 @@ def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list):
         print(f"[!] маркировка gone не удалась: {e}")
 
 
+def mark_replaced_lots(source: str, lots: list):
+    """После успешного пуша: старые лоты этого источника, которых нет в новой
+    пачке, помечаем gone. Лента показывает только результаты текущего прогона,
+    а не накопленный хвост прошлых логик/сканов."""
+    if "--no-push" in sys.argv or not WORKER_SECRET:
+        return
+    import httpx
+    try:
+        r = httpx.get(
+            f"{SERVER_URL}/api/worker/lots-ids",
+            headers={"X-Worker-Secret": WORKER_SECRET},
+            params={"source": source}, timeout=60,
+        )
+        if r.status_code != 200:
+            return
+        new_ids = {str(l["id"]) for l in lots}
+        stale = [str(row["id"]) for row in r.json().get("rows", [])
+                 if str(row["id"]) not in new_ids]
+        if not stale:
+            return
+        rg = httpx.post(
+            f"{SERVER_URL}/api/worker/lots-gone",
+            headers={"X-Worker-Secret": WORKER_SECRET},
+            json={"source": source, "ids": stale[:2000]}, timeout=60,
+        )
+        if rg.status_code == 200:
+            print(f"старых лотов {source} помечено: {rg.json().get('gone', 0)}")
+    except Exception as e:
+        print(f"[!] замена старых лотов {source} не удалась: {e}")
+
+
 def main():
     ping_server()
     watchlist = load_watchlist()
@@ -829,6 +860,8 @@ def main():
     if "--no-push" not in sys.argv:
         saved, skipped = push_to_server(lots)
         print(f"пуш: saved={saved} skipped={skipped}")
+        if saved > 0:
+            mark_replaced_lots("GIFTS", lots)
     else:
         print(f"пуш: off (--no-push), лотов к пушу: {len(lots)}")
 
