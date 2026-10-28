@@ -446,219 +446,134 @@ def fragment_fetch(gift_name: str):
 def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
-# ---------------- Сравнение ----------------
+# ---------------- Оценка ----------------
+# Правила (ТЗ):
+# 1) флор именно по МОДЕЛИ (а не по коллекции), та же валюта, что цена лота (TON);
+# 2) discount = (floor_model - price) / floor_model;
+# 3) чистая цена продажи = floor_model * (1 - комиссия маркета), профит = чистая - покупка;
+# 4) выгодный = discount >= 10% И профит > 0;
+# 5) цена >= флора -> отбросить;
+# 6) редкость модели/фона/символа < 2% -> "редкий", планка выше флора (премия);
+# 7) флор старше 10 минут -> устарел, пересчитать перед оценкой;
+# 8) причина у сделки: "-15% от флора" или "редкий фон".
 
-# Кэш истории продаж Portals per-SKU: uuid -> (avg_price, ts_cache)
-_PORTALS_SOLD_CACHE = {}
-_POR_SOLD_SAMP = 2   # сколько SKU-касс opting per model спрашивать у Portals
-
-
-def portals_sold_avg(nft_uuid: str) -> float:
-    """Средняя цена РЕАЛЬНЫХ продаж этого SKU на Portals.
-    Сначала пробуем свежие 7 дней (актуальная планка), если продаж нет — 30 дней."""
-    if not nft_uuid:
-        return 0.0
-    now = time.time()
-    got = _PORTALS_SOLD_CACHE.get(nft_uuid)
-    if got and now - got[1] < 6 * 3600:
-        return got[0]
-    val = 0.0
-    for period in ("7 days", "30 days"):
-        try:
-            r = requests.get(f"{PORTALS_BASE}/nfts/{nft_uuid}/price/average/detailed",
-                             params={"period": period}, headers=UA_HEADERS,
-                             impersonate="chrome", timeout=20)
-        except Exception:
-            continue
-        if r.status_code != 200:
-            continue
-        try:
-            avg = float(r.json().get("avg_price") or 0)
-        except (TypeError, ValueError):
-            avg = 0.0
-        if avg > 0:
-            val = avg
-            break
-    _PORTALS_SOLD_CACHE[nft_uuid] = (val, now)
-    return val
+FLOOR_TTL_SEC = 600.0      # правило 7: TTL флора модели
+RARE_PCT = 2.0             # правило 6: порог редкости (%)
+RARE_PREMIUM = 1.25        # "оценивать выше флора": планка редкого = флор x премия
 
 
-def model_sold_fair(mlots, listing_median: float) -> tuple:
-    """(avg_ton, n_skus_with_sales) — планка по реальным продажам точной модели (одинаковый фон).
-    Правила против «минуса»:
-      • требуем данные минимум с 2 разных SKU (одна продажа одного SKU — шум);
-      • avg выше медианы листингов*2 — планка устарела, не верим ей."""
-    uuids = [l.get("id") for l in mlots if l.get("venue") == "Portals" and l.get("id")]
-    if not uuids or len(uuids) < 2:
-        return 0.0, 0
-    want = max(2, min(_POR_SOLD_SAMP + 1, len(uuids)))
-    picks = random.sample(uuids, want)
-    avs = []
-    for u in picks:
-        a = portals_sold_avg(u)
-        if a > 0:
-            avs.append(a)
-        time.sleep(random.uniform(0.7, 1.4))
-    if len(avs) < 2:
-        return 0.0, 0
-    avg = statistics.median(avs)
-    if listing_median > 0 and avg > listing_median * 2.0:
-        return 0.0, 0
-    return avg, len(avs)
+def get_model_floor(mlots, model, cached=None, now=None):
+    """Флор по МОДЕЛИ из текущих листингов. cached={'value': float, 'ts': float}.
+    Возвращает (floor, возраст_сек, пересчитан). Флор старше FLOOR_TTL_SEC — устарел."""
+    now = now if now is not None else time.time()
+    if cached and cached.get("value", 0) > 0 and (now - cached.get("ts", 0)) <= FLOOR_TTL_SEC:
+        return float(cached["value"]), now - cached["ts"], False
+    prices = [l["price_ton"] for l in mlots
+              if l.get("model") == model and l.get("price_ton", 0) > 0]
+    if not prices:
+        return 0.0, 0.0, True
+    return min(prices), 0.0, True
 
-# ---------------- Сравнение ----------------
+
+def evaluate_lot(price_ton: float, floor_model: float, rate: float,
+                 rare: str = "", fee_pct: float = None,
+                 premium: float = None, min_discount: float = 0.10):
+    """Чистая оценка одного лота по правилам 2-6/8. None -> лот отбросить."""
+    if floor_model is None or floor_model <= 0 or price_ton is None or price_ton <= 0:
+        return None
+    fee_pct = RESELL_FEE_PCT if fee_pct is None else fee_pct
+    premium = RARE_PREMIUM if premium is None else premium
+    floor_eff = floor_model * premium if rare else floor_model
+    if price_ton >= floor_eff:  # правило 5 (для редких планка — floor_eff)
+        return None
+    discount = (floor_eff - price_ton) / floor_eff
+    if discount + 1e-9 < min_discount:  # правило 4
+        return None
+    net_sell = floor_eff * (1.0 - fee_pct / 100.0)  # правило 3
+    profit_ton = net_sell - price_ton
+    if profit_ton <= 0:
+        return None
+    reason = rare if rare else "-%d%% от флора" % round(discount * 100)
+    return {
+        "floor_model": floor_model,
+        "fair_ton": floor_eff,
+        "discount": round(discount, 3),
+        "profit_ton": round(profit_ton, 2),
+        "profit_rub": round(profit_ton * rate),
+        "net_sell_ton": round(net_sell, 2),
+        "reason": reason,
+    }
+
+
+def rare_reason(model: str, lot: dict, mlots: list):
+    """Правило 6: редкость модели/фона/символа < 2% (доля во всей выборке).
+    Возвращает ярлык или ''."""
+    rar = parse_model_rarity(model)
+    if rar and 0 < rar < RARE_PCT:
+        return "редкая модель"
+    n = max(1, len(mlots))
+    bg_hits = sum(1 for l in mlots if l.get("backdrop") == lot.get("backdrop"))
+    if (bg_hits / n * 100.0) < RARE_PCT:
+        return "редкий фон"
+    sym = lot.get("symbol", "—")
+    if sym and sym != "—":
+        sym_hits = sum(1 for l in mlots if l.get("symbol") == sym)
+        if (sym_hits / n * 100.0) < RARE_PCT:
+            return "редкий символ"
+    return ""
+
 
 def find_with_model_deals(all_lots, rate: float):
-    """Три методики планки на одних данных, в пуш идёт лучшая:
-    A «продажи+соседи» — текущая гибридная (sold-avg, медиана, перебить соседа);
-    B «перебей соседа» — планка только живыми листингами того же фона, выход быстрый;
-    C «строго по продажам» — планка только реальными продажами (своего SKU + модели)."""
-    st = load_state()
-    deals = {"A": [], "B": [], "C": []}
-    sum_net = {"A": 0.0, "B": 0.0, "C": 0.0}
+    """Оценка по правилам ТЗ: флор модели -> discount/профит -> причины."""
     import collections as _c
     diag = _c.Counter()
+    deals = []
     for gift, lots in all_lots.items():
         diag['lots'] += len(lots)
         by_model = {}
         for l in lots:
-            by_model.setdefault(l["model"], []).append(l)
+            if l.get("price_ton", 0) > 0 and l.get("model"):
+                by_model.setdefault(l["model"], []).append(l)
         for model, mlots in by_model.items():
             if len(mlots) < MIN_SAMPLES:
                 diag['мало_образцов'] += 1
                 continue
-            diag['групп'] += 1
-            prices = [l["price_ton"] for l in mlots]
-            median = statistics.median(prices)
-            if median <= 0:
+            # правило 7: флор модели всегда пересчитываем из свежих листингов
+            floor_model, _, recomputed = get_model_floor(mlots, model)
+            if not recomputed:
+                diag['флор_из_кеша'] += 1
+            if floor_model <= 0:
+                diag['флора_нет'] += 1
                 continue
-            mlots.sort(key=lambda x: x["price_ton"])
+            rar = parse_model_rarity(model)
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
-            #итог sold-вызовы дороги: тянем данные продаж только если в группе
-            #есть дешёвые кандидаты под модели/продажи (для B они не нужны)
-            has_cheap = any(p * 100.0 <= median * (100.0 - min(DEAL_PCT, DEAL_PCT_C)) for p in prices)
-            if not has_cheap:
-                diag['дешёвых_нет'] += 1
-                continue
-            sold_ton, sold_n = model_sold_fair(mlots, median)
-            rar = parse_model_rarity(model)
-
-            def push(venue, li, fair, src_i, pct_need, net_need, sold_ref=0.0):
-                if fair <= 0:
-                    diag['нет_планки'] += 1
-                    return
-                # страховка для планки «перебей соседа»: если сосед-дороже-всех
-                # выглядит выбросом против реальных продаж модели — не верим
-                if sold_ref > 0 and fair > sold_ref * 1.6:
-                    diag['сосед_выброс'] += 1
-                    return
-                gross_rub = rate * (fair - li["price_ton"])
-                fees_rub = rate * fair * RESELL_FEE_PCT / 100.0
-                net_rub = gross_rub - fees_rub
-                if li["price_ton"] * 100.0 > fair * (100.0 - pct_need):
-                    diag['скидки_нет'] += 1
-                    return
-                if net_rub < net_need:
-                    diag['мелко'] += 1
-                    return
+            for l in mlots:
+                rare = rare_reason(model, l, mlots)
+                res = evaluate_lot(l["price_ton"], floor_model, rate, rare=rare)
+                if not res:
+                    diag['отброшено'] += 1
+                    continue
                 d = {
                     "gift": gift, "model": model, "rarity": rar,
-                    "price_ton": li["price_ton"], "fair_ton": fair,
-                    "fair_src": src_i,
-                    "venue": li["venue"], "backdrop": li["backdrop"],
-                    "symbol": li["symbol"], "gift_id": li.get("gift_id", ""),
-                    "gift_num": li.get("gift_num", ""),
-                    "tg_id": li.get("tg_id", ""),
-                    "portals_id": li.get("id", ""),
-                    "net_rub": round(net_rub),
+                    "price_ton": l["price_ton"], "fair_ton": res["fair_ton"],
+                    "fair_src": res["reason"],
+                    "venue": l["venue"], "backdrop": l["backdrop"],
+                    "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
+                    "gift_num": l.get("gift_num", ""),
+                    "tg_id": l.get("tg_id", ""),
+                    "portals_id": l.get("id", ""),
+                    "net_rub": res["profit_rub"],
                     "floors": floors,
                 }
-                deals[method].append(d)
-
-            # ---------- A: гибрид (как раньше) ----------
-            for method in ("A",):
-                fair_ton = median
-                fair_src = "листинги"
-                if sold_ton > 0:
-                    fair_ton = min(sold_ton, median)
-                    fair_src = f"продажи Portals ({sold_n})"
-                cand_lots = [l for l in mlots if l["price_ton"] * 100.0 <= fair_ton * (100.0 - DEAL_PCT)]
-                refined = []
-                for l in cand_lots:
-                    f_i = fair_ton
-                    src_i = fair_src
-                    same_bg = sorted(l2["price_ton"] for l2 in mlots if l2["backdrop"] == l["backdrop"])
-                    if len(same_bg) >= 2:
-                        second = same_bg[1] if l["price_ton"] <= same_bg[0] else same_bg[0]
-                        if second > 0 and second < f_i:
-                            f_i = second
-                            src_i = "перебил соседа"
-                    own = l.get("id") if l.get("venue") == "Portals" else ""
-                    if own:
-                        own_avg = portals_sold_avg(own)
-                        if own_avg > 0 and own_avg < f_i:
-                            f_i = own_avg
-                            src_i = "свой SKU"
-                    if l["price_ton"] * 100.0 <= f_i * (100.0 - DEAL_PCT):
-                        push(l["venue"], l, f_i, src_i, DEAL_PCT, MIN_NET_RUB)
-                        refined.append(l)
-
-            # ---------- B: перебей живого соседа ----------
-            for method in ("B",):
-                for l in mlots:
-                    same_bg = sorted(l2["price_ton"] for l2 in mlots if l2["backdrop"] == l["backdrop"])
-                    if len(same_bg) < 2 or l["price_ton"] > same_bg[0]:
-                        continue  # не самый дешёвый своего фона — перебить нельзя
-                    # планка = живой сосед того же фона, чуть выше которого нельзя продать
-                    fair_b = same_bg[1]
-                    src_i = "перебил соседа"
-                    push(l["venue"], l, fair_b, src_i, DEAL_PCT_B, MIN_NET_RUB, sold_ton)
-
-            # ---------- C: строго по продажам ----------
-            for method in ("C",):
-                if sold_ton <= 0:
-                    continue
-                for l in mlots:
-                    # планка = продажи SKU той же модели; кандидат обязан быть
-                    # дешевле планки, иначе sold-вызов не делаем (их и так сотни)
-                    if l["price_ton"] * 100.0 > sold_ton * (100.0 - DEAL_PCT_C):
-                        continue
-                    f_i = sold_ton
-                    src_i = f"продажи SKU ({sold_n})"
-                    own = l.get("id") if l.get("venue") == "Portals" else ""
-                    if own:
-                        own_avg = portals_sold_avg(own)
-                        if own_avg > 0 and own_avg < f_i:
-                            f_i = own_avg
-                            src_i = "свой SKU"
-                    push(l["venue"], l, f_i, src_i, DEAL_PCT_C, MIN_NET_C)
-
-    # сводка: считаем только уникальные (venue|backdrop|num) сделки между методиками
-    summary = {}
-    for method in ("A", "B", "C"):
-        uniq = {}
-        for d in deals[method]:
-            k = (d["venue"], d["backdrop"], d["gift_num"])
-            if k not in uniq or d["net_rub"] > uniq[k]["net_rub"]:
-                uniq[k] = d
-        deals[method] = list(uniq.values())
-        sum_net[method] = sum(d["net_rub"] for d in deals[method])
-        summary[method] = (len(deals[method]), sum_net[method])
-    print("[методики] " + "; ".join(
-        f"{m}: {summary[m][0]} сделок, ЧП {int(sum_net[m]):,} ₽".replace(",", " ")
-        for m in ("A", "B", "C")))
-    best = max(("A", "B", "C"), key=lambda m: (sum_net[m], len(deals[m])))
-    print(f"[методики] лучшая: {best} → варки: {', '.join(sorted(set(d['fair_src'] for d in deals[best]))) if deals[best] else 'пусто'}")
-    diag['сделок_' + best] = len(deals[best])
+                deals.append(d)
+    diag['сделок'] = len(deals)
     print('[diag]', dict(diag))
-    final = []
-    for d in deals[best]:
-        d["made_by"] = best
-        final.append(d)
-    final.sort(key=lambda d: -d["net_rub"])
-    return final[:20]
+    deals.sort(key=lambda d: -d["net_rub"])
+    if len(deals) > 40:
+        deals = deals[:40]
+    return deals
 
 
 def lot_url(d: dict) -> str:
