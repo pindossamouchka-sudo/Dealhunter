@@ -7,7 +7,7 @@
   <meta name="theme-color" id="meta-theme" content="#0A0B0E" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
@@ -789,6 +789,181 @@
       .lot-claim { padding: 0 10px !important; }
     }
 
+    /* ---------- ЗАГРУЗОЧНАЯ ЗАСТАВКА ----------
+       Она же экран загрузки: пока грузится состояние, поверх приложения
+       лежит тёмный экран. Живёт 1.5–2.9 с, потом уезжает, а интерфейс
+       собирается из летящих блоков (см. playBuild в скрипте).
+       Внутри — только opacity/transform, никаких фильтров на скроллящихся
+       элементах, чтобы заставка не отнимала кадры у ленты. */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+
+    body.intro-lock { overflow: hidden; }
+    body.intro-lock .bg-scene { visibility: hidden; }
+
+    .intro {
+      position: fixed; inset: 0; z-index: 90;
+      max-width: 430px; margin: 0 auto;
+      display: flex; align-items: center; justify-content: center;
+      padding: 28px 26px calc(28px + var(--safe-bottom));
+      background:
+        radial-gradient(120% 58% at 50% 2%, var(--accent-glow), transparent 62%),
+        radial-gradient(85% 45% at 50% 104%, rgba(255, 255, 255, 0.055), transparent 70%),
+        var(--bg-deep);
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.42s var(--ease-smooth), transform 0.42s var(--ease-smooth);
+    }
+    .intro::after {
+      content: ''; position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(128% 88% at 50% 46%, transparent 38%, rgba(0, 0, 0, 0.62) 100%);
+    }
+    .intro.is-out {
+      opacity: 0; transform: scale(1.05) translate3d(0, -8px, 0);
+      pointer-events: none;
+    }
+
+    .intro-inner {
+      position: relative; z-index: 1;
+      width: 100%; max-width: 330px;
+      display: flex; flex-direction: column; align-items: center;
+      text-align: center;
+    }
+
+    .intro-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 4px 12px 4px 4px; border-radius: 999px;
+      font-size: 11px; letter-spacing: 0.01em;
+      color: rgba(248, 248, 241, 0.72);
+      animation: intro-fade 0.7s var(--ease-out) 0.05s backwards;
+    }
+    .intro-chip {
+      display: inline-block; padding: 4px 9px; border-radius: 999px;
+      background: #FFFFFF; color: #0A0B0E;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+    }
+
+    /* Стекло с градиентной рамкой (mask-composite), как в референсе.
+       blur(4px) — единственный фильтр заставки, элемент не скроллится. */
+    .liquid-glass {
+      position: relative; overflow: hidden;
+      background: rgba(255, 255, 255, 0.045);
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+      box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.12);
+    }
+    .liquid-glass::before {
+      content: ''; position: absolute; inset: 0; border-radius: inherit;
+      padding: 1.2px; pointer-events: none;
+      background: linear-gradient(180deg,
+        rgba(255, 255, 255, 0.42) 0%,
+        rgba(255, 255, 255, 0.14) 22%,
+        rgba(255, 255, 255, 0) 42%,
+        rgba(255, 255, 255, 0) 58%,
+        rgba(255, 255, 255, 0.14) 78%,
+        rgba(255, 255, 255, 0.40) 100%);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask-composite: exclude;
+    }
+
+    .intro-brand {
+      display: inline-flex; align-items: center; gap: 9px;
+      margin-top: 22px;
+      font-family: var(--font-display); font-weight: 800;
+      font-size: 13px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: #F8F8F1;
+      animation: intro-fade 0.7s var(--ease-out) 0.14s backwards;
+    }
+    .intro-brand span { color: rgba(248, 248, 241, 0.46); font-weight: 600; }
+    .intro-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); box-shadow: 0 0 14px var(--accent-glow);
+    }
+
+    .intro-title {
+      margin: 16px 0 0;
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-style: italic; font-weight: 400;
+      font-size: clamp(33px, 10.6vw, 44px);
+      line-height: 0.98; letter-spacing: -0.012em;
+      color: #FBFBF5;
+    }
+    .intro-line { display: block; white-space: nowrap; }
+    .intro-line-accent { color: var(--accent-ink); }
+    .iw { display: inline-block; }
+    .intro-title .iw { animation: word-in 0.9s var(--ease-out) backwards; }
+    .iw-1 { animation-delay: 0.26s; }
+    .iw-2 { animation-delay: 0.34s; }
+    .iw-3 { animation-delay: 0.44s; }
+    .iw-4 { animation-delay: 0.52s; }
+
+    .intro-sub {
+      margin: 14px 0 0; max-width: 268px;
+      font-size: 12.5px; line-height: 1.55;
+      color: rgba(248, 248, 241, 0.58);
+      animation: intro-fade 0.8s var(--ease-out) 0.62s backwards;
+    }
+
+    .intro-progress {
+      width: 168px; height: 3px; margin-top: 30px;
+      border-radius: 999px; overflow: hidden;
+      background: rgba(255, 255, 255, 0.10);
+      animation: intro-fade 0.6s var(--ease-smooth) 0.3s backwards;
+    }
+    .intro-progress-fill {
+      display: block; height: 100%; width: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent-ink));
+      transform: scaleX(0.04); transform-origin: left center;
+      transition: transform 0.55s var(--ease-smooth);
+    }
+
+    .intro-status {
+      margin-top: 11px;
+      font-size: 10.5px; font-weight: 600;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      color: rgba(248, 248, 241, 0.40);
+    }
+
+    .intro-hint {
+      position: absolute; z-index: 2;
+      left: 0; right: 0; bottom: calc(26px + var(--safe-bottom));
+      margin: 0; text-align: center;
+      font-size: 10px; font-weight: 600;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      color: rgba(248, 248, 241, 0.34);
+      animation: hint-pulse 2.8s var(--ease-smooth) 1s infinite;
+    }
+
+    @keyframes intro-fade {
+      from { opacity: 0; transform: translate3d(0, 10px, 0); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes word-in {
+      from { opacity: 0; transform: translate3d(0, 16px, 0); filter: blur(10px); }
+      to { opacity: 1; transform: none; filter: blur(0); }
+    }
+    @keyframes word-in-lite {
+      from { opacity: 0; transform: translate3d(0, 16px, 0); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes hint-pulse {
+      0%, 100% { opacity: 0.30; }
+      50% { opacity: 0.68; }
+    }
+
+    /* Слабое железо: без размытия слов и без пульсации подсказки. */
+    html.low-perf .intro-title .iw { animation-name: word-in-lite; }
+    html.low-perf .intro-hint { animation: none; opacity: 0.4; }
+    html.low-perf .liquid-glass {
+      -webkit-backdrop-filter: none; backdrop-filter: none;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
     /* ---------- ДОСТУПНОСТЬ ---------- */
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
@@ -807,6 +982,24 @@
 </head>
 <body>
   <div class="phone-shell" id="shell">
+    <div class="intro" id="intro">
+      <div class="intro-inner">
+        <div class="intro-badge liquid-glass">
+          <span class="intro-chip">Новое</span>
+          <span class="intro-badge-text">радар выгод в Telegram</span>
+        </div>
+        <div class="intro-brand"><i class="intro-dot" aria-hidden="true"></i>Deal<span>Hunter</span></div>
+        <h2 class="intro-title">
+          <span class="intro-line"><span class="iw iw-1">Находим</span> <span class="iw iw-2">выгоду</span></span>
+          <span class="intro-line intro-line-accent"><span class="iw iw-3">раньше</span> <span class="iw iw-4">всех.</span></span>
+        </h2>
+        <p class="intro-sub">Бу-лоты и подарки дешевле рынка — в одном месте</p>
+        <div class="intro-progress" aria-hidden="true"><span class="intro-progress-fill"></span></div>
+        <div class="intro-status" id="intro-status" aria-hidden="true">Подключаемся…</div>
+      </div>
+      <p class="intro-hint" aria-hidden="true">Нажмите, чтобы пропустить</p>
+      <span class="sr-only" role="status">Загрузка DealHunter</span>
+    </div>
     <div class="bg-scene" aria-hidden="true">
       <span class="orb orb-1"></span>
       <span class="orb orb-2"></span>
@@ -2162,6 +2355,157 @@ function lotCategory(title, desc) {
       if (window.lucide) lucide.createIcons();
     }
 
+    /* ============================================================
+       СТАРТОВАЯ ЗАСТАВКА + СБОРКА ИНТЕРФЕЙСА
+       Заставка висит, пока грузится состояние (но не дольше MAX).
+       После неё блоки приложения влетают на свои места: шапка сверху,
+       фильтры снизу, карточки поочерёдно слева/справа, док снизу.
+       Всё на Web Animations API — только opacity и transform,
+       поэтому анимация идёт на композиторе и не роняет fps.
+       ============================================================ */
+    const INTRO_KEY = 'dh_intro_seen';
+
+    function playBuild() {
+      const shell = document.getElementById('shell');
+      if (!shell) return;
+      try {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      } catch (e) {}
+      const low = document.documentElement.classList.contains('low-perf');
+      const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+      const SPRING = 'cubic-bezier(0.34, 1.16, 0.46, 1)';
+      const run = (el, frames, opts) => {
+        if (!el) return;
+        // Гасим CSS-анимацию, иначе она конфликтует с WAAPI за transform.
+        el.style.animation = 'none';
+        try {
+          el.animate(frames, Object.assign({ fill: 'backwards' }, opts));
+        } catch (e) {}
+      };
+
+      run(shell.querySelector('.top-header'), [
+        { opacity: 0, transform: 'translate3d(0, -34px, 0)' },
+        { opacity: 1, transform: 'none' }
+      ], { duration: 560, easing: EASE });
+
+      run(shell.querySelector('.feed-controls'), [
+        { opacity: 0, transform: 'translate3d(0, 36px, 0)' },
+        { opacity: 1, transform: 'none' }
+      ], { duration: 620, delay: 80, easing: EASE });
+
+      const vh = window.innerHeight || 800;
+      const cards = Array.prototype.slice
+        .call(shell.querySelectorAll('.screen-content .lot-card'))
+        .filter(el => el.getBoundingClientRect().top < vh * 1.1)
+        .slice(0, low ? 3 : 8);
+
+      cards.forEach((el, i) => {
+        const dir = i % 2 ? 1 : -1;
+        run(el, [
+          { opacity: 0, transform: `translate3d(${dir * 54}px, 32px, 0) rotate(${dir * 2.2}deg) scale(0.94)` },
+          { opacity: 1, transform: 'none' }
+        ], { duration: 720, delay: 140 + i * (low ? 40 : 62), easing: SPRING });
+      });
+
+      const dock = shell.querySelector('.floating-dock-wrap');
+      if (dock) {
+        dock.style.animation = 'none';
+        try {
+          dock.animate([
+            { opacity: 0, transform: 'translate(-50%, 46px) scale(0.92)' },
+            { opacity: 1, transform: 'translate(-50%, 0) scale(1)' }
+          ], { duration: 640, delay: 220, fill: 'backwards', easing: SPRING });
+        } catch (e) {}
+      }
+    }
+
+    function initIntro() {
+      const el = document.getElementById('intro');
+      const api = { ready: () => {} };
+      if (!el) {
+        document.body.classList.remove('intro-lock');
+        playBuild();
+        return api;
+      }
+
+      let seen = false;
+      try { seen = sessionStorage.getItem(INTRO_KEY) === '1'; } catch (e) {}
+      const MIN = seen ? 700 : 1500;
+      const MAX = seen ? 1600 : 2900;
+      const t0 = performance.now();
+
+      try { document.body.classList.add('intro-lock'); } catch (e) {}
+
+      const fill = el.querySelector('.intro-progress-fill');
+      const statusEl = document.getElementById('intro-status');
+      const setFill = v => { if (fill) fill.style.transform = `scaleX(${v})`; };
+      const setStatus = t => { if (statusEl) statusEl.textContent = t; };
+
+      const timers = [];
+      const later = (fn, ms) => timers.push(setTimeout(fn, Math.max(0, ms)));
+      const clearTimers = () => { while (timers.length) clearTimeout(timers.pop()); };
+
+      let finished = false;
+
+      setFill(0.06);
+      later(() => setFill(0.38), 70);
+      later(() => setFill(0.72), MIN * 0.45);
+      later(() => { setFill(0.9); setStatus('Собираем предложения…'); }, MIN * 0.72);
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearTimers();
+        el.removeEventListener('pointerdown', skip);
+        window.removeEventListener('keydown', skip);
+        setFill(1);
+        el.classList.add('is-out');
+
+        const reduced = (() => {
+          try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+        })();
+
+        setTimeout(() => {
+          if (el.parentNode) el.parentNode.removeChild(el);
+          document.body.classList.remove('intro-lock');
+          try { sessionStorage.setItem(INTRO_KEY, '1'); } catch (e) {}
+          playBuild();
+        }, reduced ? 190 : 430);
+      };
+
+      function skip(e) {
+        if (e && e.type === 'keydown') {
+          if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Escape' && e.code !== 'Space') return;
+          e.preventDefault();
+        }
+        finish();
+      }
+
+      el.addEventListener('pointerdown', skip, { passive: true });
+      window.addEventListener('keydown', skip);
+
+      // Контент готов — досматриваем минимум и уходим.
+      api.ready = () => {
+        if (finished) return;
+        const left = MIN - (performance.now() - t0);
+        const go = () => {
+          if (finished) return;
+          setFill(1);
+          setStatus('Готово');
+          later(finish, 240);
+        };
+        if (left > 200) later(go, left);
+        else go();
+      };
+
+      // Страховка: даже если данные не пришли, заставка не держится вечно.
+      later(() => { setFill(1); setStatus('Готово'); later(finish, 260); }, MAX);
+
+      return api;
+    }
+
+    const intro = initIntro();
+
     (async () => {
       try { state.sessionToken = localStorage.getItem('dh_session'); } catch (e) {}
       const hadToken = await redeemLoginToken();
@@ -2169,6 +2513,7 @@ function lotCategory(title, desc) {
         // нет ни Telegram-подписи, ни сессии — сразу.getField экран входа не нужен, syncState покажет welcome
       }
       await syncState();
+      intro.ready();
 
       // Авто-обновление ленты: новые лоты подтягиваются сами, без ручного refresh
       setInterval(() => {
