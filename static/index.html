@@ -4,226 +4,831 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>DealHunter PRO</title>
+  <meta name="theme-color" id="meta-theme" content="#0A0B0E" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
+    /* ============================================================
+       DealHunter design system
+       Темы: dark (чёрный + оранжевый) и olive (оливки).
+       Все цвета — только через семантические токены.
+       ============================================================ */
     :root {
-      --bg-canvas: #E4E6EC; --bg-app: #F2F3F7;
-      --glass-card: rgba(255, 255, 255, 0.86);
-      --glass-pill: rgba(15, 17, 26, 0.06);
-      --glass-dock: rgba(255, 255, 255, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.9);
-      --glass-stroke: rgba(15, 17, 26, 0.08);
-      --text-primary: #111216; --text-secondary: #5E626E; --text-muted: #969AA7;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.28); --accent-soft: rgba(255, 90, 31, 0.13);
-      --accent-2: #FF7A45; --on-accent: #FFFFFF;
-      --green: #18B259; --green-soft: rgba(24, 178, 89, 0.15);
+      color-scheme: dark;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-display: 'Manrope', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-num: 'Inter', 'SF Mono', ui-monospace, monospace;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
     }
-    [data-theme="dark"] {
-      --bg-canvas: #040406; --bg-app: #0A0B0E;
-      --glass-card: rgba(22, 24, 30, 0.78);
-      --glass-pill: rgba(255, 255, 255, 0.07);
-      --glass-dock: rgba(18, 20, 26, 0.88);
-      --glass-border: rgba(255, 255, 255, 0.09);
-      --glass-stroke: rgba(255, 255, 255, 0.07);
-      --text-primary: #F5F6FA; --text-secondary: #9499A6; --text-muted: #5B606E;
-      --accent: #FF5A1F; --accent-glow: rgba(255, 90, 31, 0.38); --accent-soft: rgba(255, 90, 31, 0.17);
-      --accent-2: #FF7A45; --on-accent: #FFFFFF;
-      --green: #2AD16C; --green-soft: rgba(42, 209, 108, 0.16);
+
+    /* ---------- ТЕМА 1: DARK (базовая) ---------- */
+    :root, [data-theme="dark"] {
+      --bg-canvas: #040406;
+      --bg-app: #0A0B0E;
+      --bg-deep: #05060A;
+      --surface-1: rgba(17, 19, 24, 0.72);
+      --surface-2: rgba(255, 255, 255, 0.045);
+      --surface-3: rgba(255, 255, 255, 0.075);
+
+      --glass-card: linear-gradient(155deg, rgba(34, 36, 44, 0.80) 0%, rgba(14, 15, 20, 0.70) 55%, rgba(20, 21, 28, 0.78) 100%);
+      --glass-dock: linear-gradient(160deg, rgba(33, 35, 43, 0.88) 0%, rgba(11, 12, 17, 0.94) 100%);
+      --glass-sheet: linear-gradient(180deg, rgba(28, 30, 38, 0.97) 0%, rgba(10, 11, 16, 0.99) 100%);
+      --glass-modal: linear-gradient(160deg, rgba(32, 34, 42, 0.97) 0%, rgba(11, 12, 17, 0.99) 100%);
+      --glass-pill: rgba(255, 255, 255, 0.055);
+      --glass-pill-hover: rgba(255, 255, 255, 0.09);
+      --glass-input: rgba(255, 255, 255, 0.05);
+      --glass-border: rgba(255, 255, 255, 0.10);
+      --glass-border-strong: rgba(255, 255, 255, 0.18);
+      --glass-stroke: rgba(255, 255, 255, 0.065);
+      --glass-highlight: rgba(255, 255, 255, 0.16);
+      --glass-sheen: radial-gradient(130% 100% at 6% 0%, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 38%, transparent 62%);
+
+      --text-primary: #F6F6F9;
+      --text-secondary: #A7ADBB;
+      --text-muted: #858B9B;
+      --text-inverse: #0A0B0E;
+
+      --accent: #FF5A1F;
+      --accent-2: #FF7A45;
+      --accent-ink: #FF7A45;
+      --accent-soft: rgba(255, 90, 31, 0.14);
+      --accent-softer: rgba(255, 90, 31, 0.07);
+      --accent-border: rgba(255, 90, 31, 0.26);
+      --accent-glow: rgba(255, 90, 31, 0.38);
+      --on-accent: #FFFFFF;
+
+      --green: #2AD16C;
+      --green-soft: rgba(42, 209, 108, 0.14);
+      --danger: #FF6B6B;
+      --danger-soft: rgba(255, 107, 107, 0.14);
+      --amber: #FFB454;
+      --amber-strong: #E8A208;
+      --amber-soft: rgba(255, 171, 64, 0.12);
+      --amber-icon: rgba(255, 171, 64, 0.18);
+      --stars: #FFC857;
+      --stars-soft: rgba(255, 200, 87, 0.12);
+      --stars-border: rgba(255, 200, 87, 0.34);
+
+      --overlay: rgba(2, 3, 6, 0.72);
+      --shadow-color: rgba(0, 0, 0, 0.62);
+      --shadow-avatar: 0 6px 16px rgba(0, 0, 0, 0.30);
+      --shadow-knob: 0 2px 6px rgba(0, 0, 0, 0.35);
+      --shadow-card: 0 24px 48px -30px rgba(0, 0, 0, 0.92), inset 0 1px 0 var(--glass-highlight);
+      --shadow-card-hover: 0 30px 60px -30px rgba(0, 0, 0, 0.96), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      --shadow-dock: 0 28px 56px -22px rgba(0, 0, 0, 0.95), inset 0 1px 0 var(--glass-highlight);
+      --shadow-modal: 0 40px 90px -30px rgba(0, 0, 0, 0.95), inset 0 1px 0 var(--glass-highlight);
+
+      --specular: rgba(255, 255, 255, 0.30);
+      --sheen-sweep: linear-gradient(105deg, transparent 38%, rgba(255, 255, 255, 0.10) 50%, transparent 62%);
+      --sheen-sweep-strong: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.22) 50%, transparent 60%);
+
+      --switch-knob: #FFFFFF;
+      --focus-ring: 0 0 0 3px rgba(255, 90, 31, 0.24);
+      --orb-1: rgba(255, 90, 31, 0.30);
+      --orb-2: rgba(255, 122, 69, 0.16);
+      --orb-3: rgba(255, 90, 31, 0.08);
+      --grain-opacity: 0.045;
+      --dock-active: linear-gradient(160deg, var(--accent-soft), var(--accent-softer));
     }
-    /* Темы профиля: bg — точный код юзера, акцент — точный код юзера,
-       производные (canvas/glass/glow/on-accent) выведены под контраст */
-    [data-theme="mint"] {
-      --bg-canvas: #0C1122; --bg-app: #121A3A;
-      --glass-card: rgba(31, 42, 74, 0.74);
-      --glass-pill: rgba(178, 242, 216, 0.10);
-      --glass-dock: rgba(15, 21, 41, 0.90);
-      --glass-border: rgba(178, 242, 216, 0.16);
-      --glass-stroke: rgba(178, 242, 216, 0.10);
-      --text-primary: #F4FAF8; --text-secondary: #9DAFC7; --text-muted: #5E6B85;
-      --accent: #B2F2D8; --accent-2: #7CDCBB; --on-accent: #0B2A20;
-      --accent-glow: rgba(178, 242, 216, 0.28); --accent-soft: rgba(178, 242, 216, 0.14);
-      --green: #34D399; --green-soft: rgba(52, 211, 153, 0.16);
-    }
-    [data-theme="forest"] {
-      --bg-canvas: #10291E; --bg-app: #1B4332;
-      --glass-card: rgba(25, 54, 42, 0.78);
-      --glass-pill: rgba(255, 179, 138, 0.10);
-      --glass-dock: rgba(14, 33, 25, 0.90);
-      --glass-border: rgba(255, 179, 138, 0.16);
-      --glass-stroke: rgba(255, 179, 138, 0.10);
-      --text-primary: #F1F5F1; --text-secondary: #A2B3A6; --text-muted: #5F7165;
-      --accent: #FFB38A; --accent-2: #F49B6D; --on-accent: #2B120B;
-      --accent-glow: rgba(255, 179, 138, 0.28); --accent-soft: rgba(255, 179, 138, 0.15);
-      --green: #34D399; --green-soft: rgba(52, 211, 153, 0.16);
-    }
+
+    /* ---------- ТЕМА 2: OLIVE (оливки) ---------- */
     [data-theme="olive"] {
-      --bg-canvas: #101012; --bg-app: #1C1C1E;
-      --glass-card: rgba(30, 30, 34, 0.82);
-      --glass-pill: rgba(169, 169, 99, 0.12);
-      --glass-dock: rgba(22, 22, 24, 0.92);
-      --glass-border: rgba(169, 169, 99, 0.18);
-      --glass-stroke: rgba(169, 169, 99, 0.12);
-      --text-primary: #EFEFEB; --text-secondary: #9C9C93; --text-muted: #62625E;
-      --accent: #A9A963; --accent-2: #8A8A4B; --on-accent: #14140C;
-      --accent-glow: rgba(169, 169, 99, 0.26); --accent-soft: rgba(169, 169, 99, 0.15);
-      --green: #9CCC65; --green-soft: rgba(156, 204, 101, 0.16);
+      --bg-canvas: #111113;
+      --bg-app: #1C1C1E;
+      --bg-deep: #0C0C0D;
+      --surface-1: rgba(38, 38, 34, 0.72);
+      --surface-2: rgba(233, 233, 196, 0.055);
+      --surface-3: rgba(233, 233, 196, 0.09);
+
+      --glass-card: linear-gradient(155deg, rgba(56, 56, 47, 0.80) 0%, rgba(27, 27, 25, 0.72) 55%, rgba(35, 35, 31, 0.80) 100%);
+      --glass-dock: linear-gradient(160deg, rgba(60, 60, 50, 0.88) 0%, rgba(23, 23, 21, 0.95) 100%);
+      --glass-sheet: linear-gradient(180deg, rgba(45, 45, 39, 0.97) 0%, rgba(20, 20, 19, 0.99) 100%);
+      --glass-modal: linear-gradient(160deg, rgba(50, 50, 43, 0.97) 0%, rgba(21, 21, 20, 0.99) 100%);
+      --glass-pill: rgba(233, 233, 196, 0.06);
+      --glass-pill-hover: rgba(233, 233, 196, 0.10);
+      --glass-input: rgba(233, 233, 196, 0.055);
+      --glass-border: rgba(214, 214, 160, 0.14);
+      --glass-border-strong: rgba(214, 214, 160, 0.24);
+      --glass-stroke: rgba(214, 214, 160, 0.085);
+      --glass-highlight: rgba(255, 255, 220, 0.18);
+      --glass-sheen: radial-gradient(130% 100% at 6% 0%, rgba(255, 255, 225, 0.09) 0%, rgba(255, 255, 225, 0.02) 38%, transparent 62%);
+
+      --text-primary: #F2F2E9;
+      --text-secondary: #B9B9AD;
+      --text-muted: #A0A095;
+      --text-inverse: #14140C;
+
+      --accent: #8A8A4B;
+      --accent-2: #B0B066;
+      --accent-ink: #CACA80;
+      --accent-soft: rgba(138, 138, 75, 0.20);
+      --accent-softer: rgba(138, 138, 75, 0.10);
+      --accent-border: rgba(176, 176, 102, 0.28);
+      --accent-glow: rgba(138, 138, 75, 0.36);
+      --on-accent: #14140C;
+
+      --green: #A8CC72;
+      --green-soft: rgba(168, 204, 114, 0.14);
+      --danger: #FF8080;
+      --danger-soft: rgba(255, 128, 128, 0.13);
+      --amber: #E0B96A;
+      --amber-strong: #D9A93F;
+      --amber-soft: rgba(224, 185, 106, 0.12);
+      --amber-icon: rgba(224, 185, 106, 0.18);
+      --stars: #E5C46A;
+      --stars-soft: rgba(229, 196, 106, 0.12);
+      --stars-border: rgba(229, 196, 106, 0.30);
+
+      --overlay: rgba(8, 8, 6, 0.72);
+      --shadow-color: rgba(0, 0, 0, 0.58);
+      --shadow-avatar: 0 6px 16px rgba(0, 0, 0, 0.30);
+      --shadow-knob: 0 2px 6px rgba(0, 0, 0, 0.35);
+      --shadow-card: 0 24px 48px -30px rgba(0, 0, 0, 0.88), inset 0 1px 0 var(--glass-highlight);
+      --shadow-card-hover: 0 30px 60px -30px rgba(0, 0, 0, 0.92), inset 0 1px 0 rgba(255, 255, 220, 0.24);
+      --shadow-dock: 0 28px 56px -22px rgba(0, 0, 0, 0.90), inset 0 1px 0 var(--glass-highlight);
+      --shadow-modal: 0 40px 90px -30px rgba(0, 0, 0, 0.92), inset 0 1px 0 var(--glass-highlight);
+
+      --specular: rgba(255, 255, 235, 0.30);
+      --sheen-sweep: linear-gradient(105deg, transparent 38%, rgba(255, 255, 225, 0.09) 50%, transparent 62%);
+      --sheen-sweep-strong: linear-gradient(105deg, transparent 40%, rgba(255, 255, 225, 0.20) 50%, transparent 60%);
+
+      --switch-knob: #F7F7EE;
+      --focus-ring: 0 0 0 3px rgba(176, 176, 102, 0.26);
+      --orb-1: rgba(138, 138, 75, 0.30);
+      --orb-2: rgba(176, 176, 102, 0.14);
+      --orb-3: rgba(138, 138, 75, 0.07);
+      --grain-opacity: 0.05;
+      --dock-active: linear-gradient(160deg, var(--accent-soft), var(--accent-softer));
     }
-    [data-theme="sand"] {
-      --bg-canvas: #062606; --bg-app: #0B3D0B;
-      --glass-card: rgba(17, 60, 17, 0.80);
-      --glass-pill: rgba(245, 230, 204, 0.12);
-      --glass-dock: rgba(8, 41, 8, 0.92);
-      --glass-border: rgba(245, 230, 204, 0.18);
-      --glass-stroke: rgba(245, 230, 204, 0.12);
-      --text-primary: #F2F3EA; --text-secondary: #ADB5A4; --text-muted: #6C7563;
-      --accent: #F5E6CC; --accent-2: #DCCEB2; --on-accent: #1F2B16;
-      --accent-glow: rgba(245, 230, 204, 0.24); --accent-soft: rgba(245, 230, 204, 0.15);
-      --green: #7BD88F; --green-soft: rgba(123, 216, 143, 0.16);
+
+    /* ---------- БАЗА ---------- */
+    * {
+      box-sizing: border-box; margin: 0; padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none; user-select: none;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; }
+    input, textarea { -webkit-user-select: text; user-select: text; }
+    html { color-scheme: dark; scroll-behavior: smooth; }
     body {
       background: var(--bg-canvas); color: var(--text-primary);
-      font-family: 'Inter', -apple-system, sans-serif;
-      display: flex; justify-content: center; min-height: 100vh; overscroll-behavior-y: contain;
+      font-family: var(--font-body);
+      display: flex; justify-content: center;
+      min-height: 100vh; min-height: 100dvh;
+      overflow-x: hidden; overscroll-behavior-y: contain;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
     }
-    .t-num { font-family: 'Inter', sans-serif; font-variant-numeric: tabular-nums; }
+    ::selection { background: var(--accent-soft); color: var(--text-primary); }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    h1, h2, h3, .font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
+    .t-num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+    :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .spin { animation: spin 1s linear infinite; }
+
     .phone-shell {
-      width: 100%; max-width: 430px; min-height: 100vh; background: var(--bg-app);
-      position: relative; overflow-x: hidden; padding-bottom: 112px;
+      width: 100%; max-width: 430px; min-height: 100vh; min-height: 100dvh;
+      background: var(--bg-app); position: relative; isolation: isolate;
+      overflow-x: clip; padding-bottom: calc(112px + var(--safe-bottom));
+      transition: background-color 0.5s var(--ease-smooth);
     }
-    .ambient-orb {
-      position: fixed; width: 310px; height: 310px; border-radius: 50%;
-      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
-      top: -95px; right: calc(50% - 210px); pointer-events: none; filter: blur(40px);
+    .phone-shell.no-dock { padding-bottom: calc(28px + var(--safe-bottom)); }
+    .phone-shell::after {
+      content: ''; position: fixed; inset: 0; max-width: 430px; margin: 0 auto;
+      pointer-events: none; opacity: 0; z-index: 70;
     }
+    html.theme-fade .phone-shell::after {
+      background: radial-gradient(90% 60% at 50% 0%, var(--accent-soft), transparent 70%);
+      animation: theme-flash 0.7s var(--ease-smooth) both;
+    }
+
+    /* ---------- ЖИВОЙ ФОН ---------- */
+    .bg-scene {
+      position: fixed; inset: 0; max-width: 430px; margin: 0 auto;
+      overflow: hidden; pointer-events: none; z-index: 0;
+    }
+    .orb {
+      position: absolute; border-radius: 50%;
+      will-change: transform; opacity: 0.9;
+    }
+    .orb-1 {
+      width: 340px; height: 340px; top: -140px; right: -110px;
+      background: radial-gradient(circle, var(--orb-1) 0%, transparent 68%);
+      animation: drift-1 22s var(--ease-smooth) infinite alternate;
+    }
+    .orb-2 {
+      width: 300px; height: 300px; bottom: 6%; left: -150px;
+      background: radial-gradient(circle, var(--orb-2) 0%, transparent 70%);
+      animation: drift-2 26s var(--ease-smooth) infinite alternate;
+    }
+    .orb-3 {
+      width: 240px; height: 240px; top: 36%; right: -130px;
+      background: radial-gradient(circle, var(--orb-3) 0%, transparent 70%);
+      animation: drift-3 30s var(--ease-smooth) infinite alternate;
+    }
+    .bg-grain {
+      position: absolute; inset: 0; opacity: var(--grain-opacity);
+      mix-blend-mode: overlay; background-size: 160px 160px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+    }
+
+    /* ---------- ЭКРАНЫ И КАСКАД ---------- */
     .screen-content { position: relative; z-index: 1; padding: 14px 14px 26px; }
-    .glass-card {
-      background: var(--glass-card); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-      border: 1px solid var(--glass-border); border-radius: 24px; padding: 16px; margin-bottom: 12px;
-      transition: all 0.25s ease;
-    }
+    .stagger > * { animation: rise-in 0.55s var(--ease-out) backwards; }
+    .stagger > *:nth-child(1) { animation-delay: 0ms; }
+    .stagger > *:nth-child(2) { animation-delay: 45ms; }
+    .stagger > *:nth-child(3) { animation-delay: 90ms; }
+    .stagger > *:nth-child(4) { animation-delay: 135ms; }
+    .stagger > *:nth-child(5) { animation-delay: 180ms; }
+    .stagger > *:nth-child(6) { animation-delay: 225ms; }
+    .stagger > *:nth-child(7) { animation-delay: 270ms; }
+    .stagger > *:nth-child(8) { animation-delay: 315ms; }
+    .stagger > *:nth-child(9) { animation-delay: 360ms; }
+    .stagger > *:nth-child(10) { animation-delay: 405ms; }
+    .stagger > *:nth-child(n+11) { animation-delay: 450ms; }
+
+    /* ---------- ШАПКА ---------- */
     .top-header {
-      position: sticky; top: 0; z-index: 20; background: var(--glass-dock);
-      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
-      border-bottom: 1px solid var(--glass-stroke); padding: 12px 16px;
+      position: sticky; top: 0; z-index: 20;
+      background: var(--glass-dock);
+      -webkit-backdrop-filter: blur(30px) saturate(170%);
+      backdrop-filter: blur(30px) saturate(170%);
+      border-bottom: 1px solid var(--glass-stroke);
+      box-shadow: 0 18px 40px -32px var(--shadow-color), inset 0 1px 0 var(--glass-highlight);
+      padding: 12px 16px;
     }
-    .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 6px; }
-    .search-input {
-      width: 100%; height: 40px; padding: 0 34px 0 36px; border-radius: 14px;
+    .brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .brand-mark {
+      width: 34px; height: 34px; border-radius: 11px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: var(--on-accent); display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 6px 18px -8px var(--accent-glow), inset 0 1px 0 var(--specular);
+    }
+    .brand-name {
+      font-family: var(--font-display); font-size: 16px; font-weight: 800;
+      line-height: 1.1; letter-spacing: -0.035em;
+    }
+    .brand-sub {
+      font-size: 10px; color: var(--text-muted); margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 132px;
+    }
+    .hdr-actions { display: flex; align-items: center; gap: 6px; }
+    .screen-title { font-family: var(--font-display); font-size: 17px; font-weight: 800; letter-spacing: -0.025em; }
+
+    /* Поиск и фильтры ленты прокручиваются вместе с контентом,
+       липкой остаётся только компактная шапка. */
+    .feed-controls {
+      position: relative; z-index: 1;
+      padding: 10px 16px 0;
+    }
+    .feed-controls .search-wrap { margin-top: 0; }
+
+    /* ---------- КНОПКИ ---------- */
+    .btn {
+      position: relative; overflow: hidden;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      border: none; font-family: inherit; font-weight: 600; text-decoration: none;
+      transition: transform 0.3s var(--ease-spring), box-shadow 0.3s var(--ease-smooth),
+                  background-color 0.3s var(--ease-smooth), border-color 0.3s var(--ease-smooth),
+                  color 0.3s var(--ease-smooth);
+    }
+    .btn::after {
+      content: ''; position: absolute; inset: -40% -20%; pointer-events: none;
+      background: var(--sheen-sweep-strong);
+      transform: translateX(-70%) rotate(8deg); opacity: 0;
+      transition: transform 0.7s var(--ease-smooth), opacity 0.3s var(--ease-smooth);
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn > * { position: relative; z-index: 1; }
+    .btn-icon {
+      width: 36px; height: 36px; border-radius: 12px;
+      background: var(--glass-pill); border: 1px solid var(--glass-stroke);
+      color: var(--text-primary);
+      -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    }
+    .btn-icon svg { transition: transform 0.35s var(--ease-spring); }
+    .btn-pill { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 12px; }
+    .btn-large { height: 50px; width: 100%; border-radius: 16px; font-size: 14px; font-weight: 700; }
+    .btn-accent {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+      color: var(--on-accent);
+      box-shadow: 0 12px 26px -12px var(--accent-glow), inset 0 1px 0 var(--specular);
+    }
+    .btn-glass {
       background: var(--glass-pill); border: 1px solid var(--glass-border);
-      color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none;
+      color: var(--text-primary);
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
     }
-    .search-input:focus { border-color: var(--accent); }
-    .search-icon { position: absolute; left: 12px; top: 12px; color: var(--text-muted); pointer-events: none; }
+    .btn-stars-bot {
+      background: var(--stars-soft); border: 1px solid var(--stars-border);
+      color: var(--stars);
+    }
+    .btn:disabled { opacity: 0.55; pointer-events: none; }
+
+    /* ---------- СТЕКЛО ---------- */
+    .glass-card {
+      position: relative; isolation: isolate; overflow: hidden;
+      background: var(--glass-sheen), var(--glass-card);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      backdrop-filter: blur(18px) saturate(150%);
+      border: 1px solid var(--glass-border);
+      border-radius: 22px; padding: 16px; margin-bottom: 12px;
+      box-shadow: var(--shadow-card);
+      transition: transform 0.45s var(--ease-spring), border-color 0.35s var(--ease-smooth),
+                  box-shadow 0.45s var(--ease-smooth);
+    }
+    .glass-card::after {
+      content: ''; position: absolute; inset: -60% -30%; pointer-events: none;
+      background: var(--sheen-sweep);
+      transform: translateX(-65%) rotate(6deg); opacity: 0;
+      transition: transform 0.9s var(--ease-smooth), opacity 0.5s var(--ease-smooth);
+    }
+    .glass-card::after { z-index: 2; }
+    .glass-card > * { position: relative; z-index: 1; }
+
+    /* ---------- ПОИСК И ФИЛЬТРЫ ---------- */
+    .search-wrap { position: relative; margin-top: 10px; display: flex; gap: 7px; }
+    .search-input {
+      width: 100%; height: 40px; padding: 0 34px 0 38px; border-radius: 14px;
+      background: var(--glass-input); border: 1px solid var(--glass-border);
+      color: var(--text-primary); font-family: inherit; font-size: 13px; outline: none;
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      transition: border-color 0.3s var(--ease-smooth), box-shadow 0.3s var(--ease-smooth),
+                  background-color 0.3s var(--ease-smooth);
+    }
+    .search-input::placeholder { color: var(--text-muted); }
+    .search-input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); background: var(--surface-2); }
+    .search-icon { position: absolute; left: 13px; top: 12px; color: var(--text-muted); pointer-events: none; }
     .search-clear {
       position: absolute; right: 88px; top: 10px; width: 20px; height: 20px;
-      border-radius: 50%; border: none; background: var(--glass-stroke);
-      color: var(--text-secondary); display: flex; align-items: center; justify-content: center; cursor: pointer;
+      border-radius: 50%; border: 1px solid var(--glass-stroke);
+      background: var(--glass-pill); color: var(--text-secondary);
+      display: flex; align-items: center; justify-content: center;
+      transition: transform 0.25s var(--ease-spring), background-color 0.25s;
     }
-    .pills-scroll { display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; margin-top: 9px; }
+    .pills-scroll {
+      display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none;
+      margin-top: 9px; padding-bottom: 2px; scroll-snap-type: x proximity;
+    }
     .pills-scroll::-webkit-scrollbar { display: none; }
     .cat-pill {
-      height: 32px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--glass-stroke);
-      background: var(--glass-pill); color: var(--text-secondary); font-size: 12px; font-weight: 600;
-      display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer;
+      height: 32px; padding: 0 13px; border-radius: 999px;
+      border: 1px solid var(--glass-stroke); background: var(--glass-pill);
+      color: var(--text-secondary); font-size: 12px; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+      scroll-snap-align: start;
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+      transition: transform 0.3s var(--ease-spring), background-color 0.3s var(--ease-smooth),
+                  border-color 0.3s var(--ease-smooth), color 0.3s var(--ease-smooth),
+                  box-shadow 0.3s var(--ease-smooth);
     }
     .cat-pill.active {
-      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent);
-      border-color: transparent; box-shadow: 0 4px 14px -3px var(--accent-glow);
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: var(--on-accent); border-color: transparent;
+      box-shadow: 0 8px 18px -10px var(--accent-glow), inset 0 1px 0 var(--specular);
+      transform: translateY(-1px);
     }
     .spec-tag {
       display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
-      border-radius: 9px; background: var(--glass-pill); border: 1px solid var(--glass-stroke);
+      border-radius: 9px; background: var(--surface-2); border: 1px solid var(--glass-stroke);
       color: var(--text-secondary); font-size: 11px; font-weight: 500;
     }
     .profit-pill {
       display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px;
-      border-radius: 12px; background: var(--accent-soft); color: var(--accent);
-      font-weight: 800; font-size: 12px;
+      border-radius: 12px; background: var(--accent-soft); border: 1px solid var(--accent-border);
+      color: var(--accent-ink); font-weight: 800; font-size: 12px; white-space: nowrap;
+      box-shadow: inset 0 1px 0 var(--glass-highlight);
     }
-    .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      border: none; font-family: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
-    }
-    .btn:active { transform: scale(0.97); }
-    .btn-icon {
-      width: 36px; height: 36px; border-radius: 12px; background: var(--glass-pill);
-      border: 1px solid var(--glass-stroke); color: var(--text-primary);
-    }
-    .btn-pill { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 12px; }
-    .btn-large { height: 48px; width: 100%; border-radius: 16px; font-size: 14px; font-weight: 700; }
-    .btn-accent {
-      background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent);
-      box-shadow: 0 8px 20px -6px var(--accent-glow);
-    }
-    .btn-stars-bot {
-      background: linear-gradient(135deg, rgba(255, 193, 7, 0.16), rgba(255, 90, 31, 0.16));
-      border: 1px solid rgba(255, 193, 7, 0.45); color: #FFC107;
-    }
-    .btn-glass { background: var(--glass-pill); border: 1px solid var(--glass-border); color: var(--text-primary); }
 
-    .floating-dock-wrap {
-      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
-      width: calc(100% - 28px); max-width: 398px; z-index: 35;
+    /* ---------- КАРТОЧКА ЛОТА ---------- */
+    .lot-card { cursor: pointer; }
+    .lot-card:active { transform: scale(0.994); }
+    .lot-card.is-viewed { opacity: 0.74; }
+    .lot-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+    .lot-head-left { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .lot-meta {
+      font-size: 12px; color: var(--text-secondary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .floating-dock {
-      height: 64px; padding: 6px; border-radius: 24px; background: var(--glass-dock);
-      backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px);
-      border: 1px solid var(--glass-border); display: grid; grid-template-columns: repeat(4, 1fr);
-      gap: 4px; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.55);
+    .lot-viewed {
+      display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+      font-size: 10px; color: var(--text-muted); font-weight: 700;
     }
-    .dock-btn {
-      border: none; background: transparent; border-radius: 18px;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 3px; color: var(--text-secondary); font-size: 11px; font-weight: 600; cursor: pointer;
+    .lot-title {
+      font-family: var(--font-display); font-size: 15px; font-weight: 800;
+      line-height: 1.35; margin-bottom: 9px; letter-spacing: -0.012em;
+      overflow-wrap: break-word;
     }
-    .dock-btn.active { background: var(--glass-pill); color: var(--accent); }
+    .lot-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .lot-price-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      flex-wrap: wrap; row-gap: 8px;
+      padding: 10px 12px; border-radius: 14px; margin-bottom: 12px;
+      background: var(--surface-2); border: 1px solid var(--glass-stroke);
+    }
+    .lot-price { font-size: 20px; font-weight: 800; letter-spacing: -0.025em; line-height: 1.2; }
+    .lot-market { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .lot-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .lot-seller {
+      font-size: 12px; color: var(--text-secondary); min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .lot-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .lot-save.is-saved svg { fill: var(--accent); stroke: var(--accent); }
 
+    .lot-price-row .profit-pill { margin-left: auto; }
+
+    /* ---------- ДЕТАЛЬ ЛОТА ---------- */
+    .detail-title {
+      font-family: var(--font-display); font-size: 19px; font-weight: 800;
+      line-height: 1.35; margin-bottom: 12px; letter-spacing: -0.02em;
+      overflow-wrap: break-word;
+    }
+    .detail-price-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      flex-wrap: wrap; row-gap: 8px;
+      padding: 12px; border-radius: 15px; margin-bottom: 14px;
+      background: var(--surface-2); border: 1px solid var(--glass-stroke);
+    }
+    .detail-price-row .profit-pill { margin-left: auto; }
+    .detail-price { font-size: 24px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.2; }
+    .detail-market { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .detail-desc { font-size: 13px; line-height: 1.55; color: var(--text-secondary); margin-bottom: 16px; }
+    .notice {
+      display: flex; align-items: center; gap: 10px; padding: 12px;
+      border-radius: 14px; margin-bottom: 12px;
+      background: var(--amber-soft); border: 1px solid var(--amber-icon);
+    }
+    .notice-icon {
+      width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+      background: var(--amber-icon); color: var(--amber-strong);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .notice-title { font-size: 13px; font-weight: 700; }
+    .notice-sub { font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-top: 2px; }
+    .seller-panel {
+      display: flex; align-items: center; gap: 10px; padding: 12px;
+      border-radius: 14px; margin-bottom: 12px;
+      background: var(--surface-2); border: 1px solid var(--glass-stroke);
+    }
+    .seller-avatar {
+      width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+      background: var(--accent-soft); color: var(--accent-ink);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .seller-name {
+      font-size: 14px; font-weight: 700; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .seller-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+    .seller-source {
+      font-size: 11px; color: var(--text-muted); flex-shrink: 0;
+      line-height: 1.4; text-align: right;
+    }
+
+    /* ---------- ПРОВЕРКА ПРОДАВЦА ---------- */
+    .check-panel {
+      margin-bottom: 12px; padding: 14px; border-radius: 18px;
+      background: var(--accent-softer); border: 1px solid var(--accent-soft);
+    }
+    .check-head { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+    .check-icon {
+      width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+      background: var(--accent-soft); color: var(--accent-ink);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .check-title { font-size: 13px; font-weight: 800; }
+    .check-sub { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; line-height: 1.4; }
+    .check-item { padding: 9px 0; border-top: 1px dashed var(--glass-stroke); }
+    .check-q { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; font-weight: 700; }
+    .check-ok, .check-bad { display: flex; align-items: flex-start; gap: 6px; font-size: 11px; margin-top: 3px; line-height: 1.4; }
+    .check-ok { color: var(--green); }
+    .check-bad { color: var(--danger); }
+    .check-q svg, .check-ok svg, .check-bad svg { flex-shrink: 0; margin-top: 1px; }
+
+    /* ---------- ПРОФИЛЬ ---------- */
+    .section-title { font-family: var(--font-display); font-size: 15px; font-weight: 800; letter-spacing: -0.015em; }
+    .section-sub { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
+    .section-icon {
+      width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+      background: var(--accent-soft); color: var(--accent-ink);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .info-tile {
+      padding: 10px 12px; border-radius: 14px; text-align: center;
+      background: var(--surface-2); border: 1px solid var(--glass-stroke);
+    }
+    .info-tile-label { font-size: 11px; color: var(--text-secondary); }
+    .info-value { font-family: var(--font-num); font-size: 20px; font-weight: 800; }
+    .ref-link {
+      padding: 10px 12px; border-radius: 12px; margin-bottom: 10px;
+      background: var(--surface-2); border: 1px solid var(--glass-stroke);
+      font-size: 11px; color: var(--text-secondary); word-break: break-all;
+    }
+    .legal-btn {
+      height: 40px; border-radius: 12px; justify-content: space-between;
+      padding: 0 12px; font-size: 12px;
+    }
+    .legal-btn.is-danger { color: var(--danger); }
+    .monitor-found {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; color: var(--green); font-weight: 600;
+    }
+
+    /* ---------- ВЫБОР ТЕМЫ ---------- */
+    .theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .theme-option {
+      position: relative; overflow: hidden; text-align: left;
+      display: flex; flex-direction: column; gap: 8px;
+      padding: 9px; border-radius: 16px; cursor: pointer;
+      background: var(--glass-pill); border: 1px solid var(--glass-border);
+      transition: transform 0.35s var(--ease-spring), border-color 0.3s var(--ease-smooth),
+                  box-shadow 0.3s var(--ease-smooth), background-color 0.3s var(--ease-smooth);
+    }
+    .theme-option.is-active {
+      border-color: var(--accent); background: var(--accent-soft);
+      box-shadow: 0 10px 24px -16px var(--accent-glow), inset 0 1px 0 var(--glass-highlight);
+    }
+    .theme-option:active { transform: scale(0.975); }
+    .theme-swatch {
+      position: relative; display: block; height: 46px; border-radius: 11px;
+      background: var(--sw-bg); border: 1px solid var(--glass-border); overflow: hidden;
+    }
+    .theme-swatch::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(80% 120% at 85% 0%, var(--sw-accent) 0%, transparent 62%);
+      opacity: 0.55;
+    }
+    .theme-swatch::after {
+      content: ''; position: absolute; left: 8px; right: 38%; top: 10px; height: 6px;
+      border-radius: 4px; background: var(--sw-accent); opacity: 0.9;
+      box-shadow: 0 12px 0 -1px var(--glass-highlight), 0 24px 0 -1px var(--glass-stroke);
+    }
+    .theme-name { font-size: 12px; font-weight: 700; }
+    .theme-check {
+      position: absolute; top: 7px; right: 7px; width: 18px; height: 18px;
+      border-radius: 50%; background: var(--accent); color: var(--on-accent);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transform: scale(0.6);
+      transition: opacity 0.25s var(--ease-smooth), transform 0.3s var(--ease-spring);
+      box-shadow: 0 4px 10px -3px var(--accent-glow);
+    }
+    .theme-option.is-active .theme-check { opacity: 1; transform: scale(1); }
+
+    /* ---------- ПЕРЕКЛЮЧАТЕЛЬ ---------- */
     .ios-switch {
-      width: 48px; height: 28px; border-radius: 999px; background: var(--glass-pill);
-      border: 1px solid var(--glass-stroke); padding: 3px; cursor: pointer; position: relative; transition: background 0.2s;
+      width: 48px; height: 28px; border-radius: 999px; flex-shrink: 0;
+      background: var(--glass-pill); border: 1px solid var(--glass-stroke);
+      padding: 3px; cursor: pointer; position: relative;
+      transition: background-color 0.3s var(--ease-smooth), border-color 0.3s var(--ease-smooth);
     }
-    .ios-switch.on { background: var(--accent); }
-    .ios-switch-knob { width: 20px; height: 20px; border-radius: 50%; background: #FFFFFF; transition: transform 0.2s; }
+    .ios-switch.on {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent; box-shadow: 0 4px 12px -4px var(--accent-glow);
+    }
+    .ios-switch-knob {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--switch-knob); box-shadow: var(--shadow-knob);
+      transition: transform 0.35s var(--ease-spring);
+    }
     .ios-switch.on .ios-switch-knob { transform: translateX(20px); }
 
+    .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    /* ---------- НИЖНИЙ ДОК ---------- */
+    .floating-dock-wrap {
+      position: fixed; bottom: calc(14px + var(--safe-bottom)); left: 50%;
+      transform: translateX(-50%); width: calc(100% - 28px); max-width: 398px;
+      z-index: 35; animation: dock-in 0.8s var(--ease-spring) both;
+    }
+    .floating-dock {
+      position: relative; height: 66px; padding: 6px; border-radius: 24px;
+      background: var(--glass-sheen), var(--glass-dock);
+      -webkit-backdrop-filter: blur(34px) saturate(180%);
+      backdrop-filter: blur(34px) saturate(180%);
+      border: 1px solid var(--glass-border);
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+      box-shadow: var(--shadow-dock); overflow: hidden;
+    }
+    .floating-dock::before {
+      content: ''; position: absolute; top: 0; left: 12%; right: 12%; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--glass-highlight), transparent);
+    }
+    .dock-btn {
+      position: relative; z-index: 1; border: none; background: transparent;
+      border-radius: 18px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 3px;
+      color: var(--text-secondary); font-size: 11px; font-weight: 600;
+      transition: color 0.3s var(--ease-smooth), background 0.35s var(--ease-smooth),
+                  transform 0.3s var(--ease-spring);
+    }
+    .dock-btn svg { transition: transform 0.35s var(--ease-spring), filter 0.3s; }
+    .dock-btn.active {
+      background: var(--dock-active); color: var(--accent-ink);
+      box-shadow: inset 0 1px 0 var(--glass-highlight), 0 8px 20px -14px var(--accent-glow);
+    }
+    .dock-btn.active svg { transform: translateY(-1px); filter: drop-shadow(0 0 8px var(--accent-glow)); }
+    .dock-btn:active { transform: scale(0.94); }
+
+    /* ---------- МОДАЛКИ ---------- */
     .modal-backdrop {
       position: fixed; inset: 0; max-width: 430px; margin: 0 auto;
-      background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      background: var(--overlay);
+      -webkit-backdrop-filter: blur(16px) saturate(120%);
+      backdrop-filter: blur(16px) saturate(120%);
       z-index: 60; display: flex; align-items: flex-end;
+      animation: fade-in 0.3s var(--ease-smooth) both;
     }
     .modal-center { align-items: center; padding: 18px; }
     .modal-sheet {
-      width: 100%; background: var(--bg-app); border-top: 1px solid var(--glass-border);
-      border-radius: 28px 28px 0 0; padding: 22px 18px 28px; max-height: 85vh; overflow-y: auto;
+      position: relative; width: 100%;
+      background: var(--glass-sheen), var(--glass-sheet);
+      border-top: 1px solid var(--glass-border);
+      border-radius: 30px 30px 0 0;
+      padding: 12px 18px calc(28px + var(--safe-bottom));
+      max-height: 85vh; overflow-y: auto;
+      box-shadow: var(--shadow-modal);
+      animation: sheet-up 0.55s var(--ease-out) both;
+    }
+    .modal-sheet::before {
+      content: ''; display: block; width: 42px; height: 4px; border-radius: 999px;
+      background: var(--glass-border-strong); margin: 0 auto 14px;
     }
     .modal-card {
-      width: 100%; background: var(--bg-app); border: 1px solid var(--glass-border);
-      border-radius: 28px; padding: 24px 20px; box-shadow: 0 25px 60px rgba(0,0,0,0.65);
+      width: 100%; background: var(--glass-sheen), var(--glass-modal);
+      border: 1px solid var(--glass-border); border-radius: 28px;
+      padding: 24px 20px; box-shadow: var(--shadow-modal);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      backdrop-filter: blur(28px) saturate(160%);
+      animation: modal-pop 0.5s var(--ease-out) both;
     }
     .input-glass {
-      width: 100%; height: 44px; padding: 0 14px; border-radius: 14px;
-      background: var(--glass-pill); border: 1px solid var(--glass-border);
-      color: var(--text-primary); font-family: inherit; font-size: 14px; outline: none; margin-bottom: 10px;
+      width: 100%; height: 46px; padding: 0 14px; border-radius: 14px;
+      background: var(--glass-input); border: 1px solid var(--glass-border);
+      color: var(--text-primary); font-family: inherit; font-size: 14px;
+      outline: none; margin-bottom: 10px;
+      transition: border-color 0.3s var(--ease-smooth), box-shadow 0.3s var(--ease-smooth),
+                  background-color 0.3s var(--ease-smooth);
     }
-    .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .input-glass::placeholder { color: var(--text-muted); }
+    .input-glass:focus { border-color: var(--accent); box-shadow: var(--focus-ring); background: var(--surface-2); }
+    select.input-glass option { background: var(--bg-app); color: var(--text-primary); }
+    .field-label {
+      font-size: 11px; font-weight: 600; color: var(--text-secondary);
+      margin: 0 2px 6px;
+    }
+
+    /* ---------- ТОСТ ---------- */
     .toast {
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90;
-      background: var(--text-primary); color: var(--bg-app); padding: 10px 18px;
-      border-radius: 99px; font-size: 12px; font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.35); white-space: nowrap;
+      position: fixed; bottom: calc(96px + var(--safe-bottom)); left: 50%; z-index: 90;
+      background: var(--glass-dock); color: var(--text-primary);
+      border: 1px solid var(--glass-border);
+      padding: 10px 18px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; white-space: nowrap;
+      box-shadow: var(--shadow-dock);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      backdrop-filter: blur(24px) saturate(160%);
+      max-width: calc(100vw - 28px); overflow: hidden; text-overflow: ellipsis;
+      animation: toast-in 0.45s var(--ease-spring) both;
     }
-    .src-badge { padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px; }
-    .src-GIFTS { background: rgba(255, 171, 64, 0.18); color: #FFAB40; }
-    .src-TG { background: rgba(70, 217, 139, 0.16); color: #46d98b; }
+
+    /* ---------- БЕЙДЖИ ---------- */
+    .timer-badge {
+      cursor: pointer; padding: 6px 11px; border-radius: 11px;
+      font-size: 11px; font-weight: 800; white-space: nowrap;
+      border: 1px solid var(--accent-border); background: var(--accent-soft);
+      color: var(--accent-ink);
+      transition: transform 0.3s var(--ease-spring), background-color 0.3s;
+    }
+    .timer-badge.is-pro {
+      background: var(--green-soft); color: var(--green); border-color: var(--green-soft);
+    }
+    .src-badge {
+      padding: 3px 8px; border-radius: 7px; font-size: 10px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 0.4px; border: 1px solid transparent;
+    }
+    .src-GIFTS { background: var(--amber-soft); color: var(--amber); border-color: var(--amber-icon); }
+    .src-TG { background: var(--green-soft); color: var(--green); border-color: var(--green-soft); }
+
+    /* ---------- HOVER (только там, где есть мышь) ---------- */
+    @media (hover: hover) and (pointer: fine) {
+      .lot-card:hover {
+        transform: translateY(-3px);
+        border-color: var(--glass-border-strong);
+        box-shadow: var(--shadow-card-hover);
+      }
+      .lot-card:hover::after { opacity: 1; transform: translateX(65%) rotate(6deg); }
+      .btn:hover::after { opacity: 1; transform: translateX(70%) rotate(8deg); }
+      .btn-accent:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 16px 32px -12px var(--accent-glow), inset 0 1px 0 var(--specular);
+      }
+      .btn-icon:hover { background: var(--glass-pill-hover); }
+      .btn-icon:hover svg { transform: scale(1.08); }
+      .cat-pill:hover { background: var(--glass-pill-hover); color: var(--text-primary); transform: translateY(-1px); }
+      .cat-pill.active:hover { color: var(--on-accent); }
+      .theme-option:hover { transform: translateY(-2px); background: var(--glass-pill-hover); }
+      .theme-option.is-active:hover { background: var(--accent-soft); }
+      .search-clear:hover { transform: scale(1.12); background: var(--glass-pill-hover); }
+      .dock-btn:hover { color: var(--text-primary); }
+      .dock-btn.active:hover { color: var(--accent-ink); }
+      .timer-badge:hover { transform: translateY(-1px); }
+    }
+
+    /* ---------- АНИМАЦИИ ---------- */
+    @keyframes rise-in {
+      from { opacity: 0; transform: translate3d(0, 16px, 0) scale(0.985); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes dock-in {
+      from { opacity: 0; transform: translate(-50%, 26px) scale(0.94); }
+      to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+    @keyframes sheet-up {
+      from { opacity: 0; transform: translateY(44px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes modal-pop {
+      from { opacity: 0; transform: translateY(14px) scale(0.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translate(-50%, 12px) scale(0.94); }
+      to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    }
+    @keyframes theme-flash {
+      0% { opacity: 0; }
+      30% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes drift-1 {
+      from { transform: translate3d(0, 0, 0) scale(1); }
+      to { transform: translate3d(-28px, 36px, 0) scale(1.12); }
+    }
+    @keyframes drift-2 {
+      from { transform: translate3d(0, 0, 0) scale(1.05); }
+      to { transform: translate3d(32px, -30px, 0) scale(0.94); }
+    }
+    @keyframes drift-3 {
+      from { transform: translate3d(0, 0, 0) scale(0.96); }
+      to { transform: translate3d(-24px, -40px, 0) scale(1.1); }
+    }
+
+    /* ---------- ПЛАВНАЯ СМЕНА ТЕМЫ ---------- */
+    html.theme-fade *,
+    html.theme-fade *::before,
+    html.theme-fade *::after {
+      transition: background-color 0.45s var(--ease-smooth),
+                  border-color 0.45s var(--ease-smooth),
+                  color 0.45s var(--ease-smooth),
+                  box-shadow 0.45s var(--ease-smooth) !important;
+    }
+
+    /* ---------- МОБИЛЬНЫЕ МЕЛОЧИ ---------- */
+    @media (max-width: 399px) {
+      .hdr-theme { display: none; }
+      .brand-sub { max-width: 118px; }
+    }
+
+    @media (max-width: 360px) {
+      .screen-content { padding-left: 11px; padding-right: 11px; }
+      .top-header { padding-left: 12px; padding-right: 12px; }
+      .feed-controls { padding-left: 12px; padding-right: 12px; }
+      .btn-large { font-size: 13px; }
+      .lot-claim { padding: 0 10px !important; }
+    }
+
+    /* ---------- ДОСТУПНОСТЬ ---------- */
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+      .orb { animation: none !important; }
+      .stagger > * { animation: none !important; }
+      .lot-card:hover, .btn-accent:hover, .theme-option:hover { transform: none !important; }
+    }
+
   </style>
 </head>
 <body>
   <div class="phone-shell" id="shell">
-    <div class="ambient-orb"></div>
+    <div class="bg-scene" aria-hidden="true">
+      <span class="orb orb-1"></span>
+      <span class="orb orb-2"></span>
+      <span class="orb orb-3"></span>
+      <span class="bg-grain"></span>
+    </div>
     <div id="toast-box"></div>
     <div id="app"></div>
   </div>
@@ -306,14 +911,23 @@
       const u = tgUser();
       const initials = esc((state.user.name || 'О').trim().charAt(0).toUpperCase());
       if (u.photo_url) {
-        return `<img src="${esc(u.photo_url)}" alt="" style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; object-fit:cover; box-shadow:0 4px 12px rgba(0,0,0,0.25);" />`;
+        return `<img src="${esc(u.photo_url)}" alt="" style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; object-fit:cover; box-shadow:var(--shadow-avatar);" />`;
       }
       return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
     }
 
-    const savedThemeRaw = localStorage.getItem('dh_theme') || 'dark';
-    const savedTheme = (savedThemeRaw === 'light' ? 'dark' : savedThemeRaw);
+    const THEME_IDS = ['dark', 'olive'];
+    let savedTheme = 'dark';
+    try {
+      const raw = localStorage.getItem('dh_theme');
+      savedTheme = THEME_IDS.includes(raw) ? raw : 'dark';
+      if (raw && raw !== savedTheme) localStorage.setItem('dh_theme', savedTheme);
+    } catch (e) {}
     document.documentElement.setAttribute('data-theme', savedTheme);
+    (function syncThemeMeta() {
+      const meta = document.getElementById('meta-theme');
+      if (meta) meta.setAttribute('content', savedTheme === 'olive' ? '#1C1C1E' : '#0A0B0E');
+    })();
 
         const SELLER_CHECK = {
       phones: {
@@ -403,19 +1017,17 @@ function lotCategory(title, desc) {
     function renderSellerCheck(title, desc) {
       const cat = SELLER_CHECK[lotCategory(title, desc)] || SELLER_CHECK.other;
       let html = `
-        <div class="glass-card" style="border:1px solid var(--accent-soft); margin-bottom:12px;">
-          <div style="display:flex; align-items:center; gap:9px; margin-bottom:5px;">
-            <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-              <i data-lucide="shield-check" style="width:17px; height:17px;"></i>
-            </div>
-            <div style="font-size:13px; font-weight:800;">Проверка перед покупкой · ${esc(cat.name)}</div>
+        <div class="check-panel">
+          <div class="check-head">
+            <div class="check-icon"><i data-lucide="shield-check" style="width:17px; height:17px;"></i></div>
+            <div class="check-title">Проверка перед покупкой · ${esc(cat.name)}</div>
           </div>
-          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:10px;">Задайте продавцу эти вопросы. Вот как отличить честную продажу от обмана:</div>`;
+          <div class="check-sub">Задайте продавцу эти вопросы. Вот как отличить честную продажу от обмана:</div>`;
       html += cat.questions.map(([q, ok, bad]) => `
-        <div style="padding:9px 0; border-top:1px dashed color-mix(in srgb, currentColor 12%, transparent);">
-          <div style="font-size:12px; font-weight:700;">❓ ${esc(q)}</div>
-          <div style="font-size:11px; color:var(--green); margin-top:3px;">✅ ${esc(ok)}</div>
-          ${bad ? `<div style="font-size:11px; color:var(--danger, #d9534f); margin-top:2px;">🚩 ${esc(bad)}</div>` : ''}
+        <div class="check-item">
+          <div class="check-q"><i data-lucide="help-circle" style="width:13px; height:13px; color:var(--accent-ink);"></i><span>${esc(q)}</span></div>
+          <div class="check-ok"><i data-lucide="check-circle-2" style="width:12px; height:12px;"></i><span>${esc(ok)}</span></div>
+          ${bad ? `<div class="check-bad"><i data-lucide="flag" style="width:12px; height:12px;"></i><span>${esc(bad)}</span></div>` : ''}
         </div>`).join('');
       return html + '</div>';
     }
@@ -430,6 +1042,7 @@ function lotCategory(title, desc) {
       searchQuery: '',
       sortBy: 'profit',
       isRefreshing: false,
+      animIn: false,
       updatedAt: '',
       detailId: null,
       confirmDelete: false,
@@ -482,35 +1095,48 @@ function lotCategory(title, desc) {
       return d > 0 ? `${d}д ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
     }
 
+    function formatCountdownShort(sec) {
+      if (!sec || sec <= 0) return 'Истёк';
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const pad = (v) => String(v).padStart(2, '0');
+      return d > 0 ? `${d}д ${pad(h)}:${pad(m)}` : `${pad(h)}:${pad(m)}`;
+    }
+
     setInterval(() => {
       if (!state.user || !state.user.subUntil) return;
       const diff = Math.floor((new Date(state.user.subUntil).getTime() - Date.now()) / 1000);
       state.user.secondsLeft = Math.max(0, diff);
       state.user.subActive = diff > 0;
       const el = document.getElementById('hdr-timer');
-      if (el) el.textContent = state.user.subActive ? ('PRO · ' + formatCountdown(diff)) : 'PRO истёк';
+      if (el) el.textContent = state.user.subActive ? ('PRO · ' + formatCountdownShort(diff)) : 'PRO истёк';
       const profEl = document.getElementById('prof-timer');
       if (profEl) profEl.textContent = formatCountdown(diff);
     }, 1000);
 
     const THEMES = [
-      { id: 'dark',   name: 'DealHunter', accent: '#FF5A1F', bg: '#0A0B0E' },
-      { id: 'mint',   name: 'Мята',       accent: '#B2F2D8', bg: '#121A3A' },
-      { id: 'forest', name: 'Лес',        accent: '#FFB38A', bg: '#1B4332' },
-      { id: 'olive',  name: 'Оливка',     accent: '#8A8A4B', bg: '#1C1C1E' },
-      { id: 'sand',   name: 'Тайга',      accent: '#F5E6CC', bg: '#0B3D0B' },
+      { id: 'dark',  name: 'DealHunter', accent: '#FF5A1F', bg: '#0A0B0E' },
+      { id: 'olive', name: 'Оливка',     accent: '#8A8A4B', bg: '#1C1C1E' },
     ];
 
     function applyTheme(id) {
       if (!THEMES.some(t => t.id === id)) id = 'dark';
+      const theme = THEMES.find(t => t.id === id);
       state.theme = id;
       document.documentElement.setAttribute('data-theme', id);
       try { localStorage.setItem('dh_theme', id); } catch (er) {}
+      const meta = document.getElementById('meta-theme');
+      if (meta && theme) meta.setAttribute('content', theme.bg);
+      try { if (tg && tg.setHeaderColor && theme) tg.setHeaderColor(theme.bg); } catch (er) {}
+      document.documentElement.classList.add('theme-fade');
+      clearTimeout(window._themeFadeT);
+      window._themeFadeT = setTimeout(() => document.documentElement.classList.remove('theme-fade'), 750);
     }
 
     function setThemeAction(id) {
       applyTheme(id);
-      showToast('🎨 Тема: ' + (THEMES.find(t => t.id === id) || {}).name);
+      showToast('Тема: ' + (THEMES.find(t => t.id === id) || {}).name);
       render();
     }
 
@@ -582,7 +1208,7 @@ function lotCategory(title, desc) {
           // скорее всего сервер «просыпается» (Render free) — пробуем ещё раз
           if (!wakeRetried) {
             wakeRetried = true;
-            showToast('⏳ Сервер просыпается, ещё 30 секунд...');
+            showToast('Сервер просыпается, ещё 30 секунд...');
             try { data = await fetchFeedJson(params, 45000); } catch (e2) {}
           }
         }
@@ -590,7 +1216,8 @@ function lotCategory(title, desc) {
           if (data.locked && state.user.trialClaimed) state.showPaywall = true;
           state.listings = data.items || [];
           state.updatedAt = data.updatedAt || '';
-          if (notify) showToast(`⚡ Загружено: ${state.listings.length} лотов`);
+          state.animIn = true;
+          if (notify) showToast(`Загружено: ${state.listings.length} лотов`);
         }
       } catch (e) {}
       state.isRefreshing = false;
@@ -603,7 +1230,7 @@ function lotCategory(title, desc) {
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           state.user = data.user;
-          showToast('🎉 PRO-доступ активирован!');
+          showToast('PRO-доступ активирован');
           await loadFeed(false);
         } else {
           showToast(data.detail || 'Ошибка активации');
@@ -621,7 +1248,7 @@ function lotCategory(title, desc) {
         if (data.invoiceUrl && tg && tg.openInvoice) {
           tg.openInvoice(data.invoiceUrl, async (status) => {
             if (status === 'paid') {
-              showToast('🎉 Оплата принята! +30 дней PRO активированы');
+              showToast('Оплата принята: +30 дней PRO');
               state.showPaywall = false;
               await syncState();
             }
@@ -710,7 +1337,7 @@ function lotCategory(title, desc) {
           const data = await res.json();
           state.monitors = data.monitors;
           state.showNewMonitor = false;
-          showToast('⚡ Авто-монитор успешно запущен!');
+          showToast('Авто-монитор успешно запущен');
           render();
         } else {
           const err = await res.json().catch(() => ({}));
@@ -755,7 +1382,7 @@ function lotCategory(title, desc) {
         if (res.ok) {
           state.user.quietStart = qs;
           state.user.quietEnd = qe;
-          showToast(`🌙 Тихие часы сохранены: ${String(qs).padStart(2,'0')}:00–${String(qe).padStart(2,'0')}:00 МСК`);
+          showToast(`Тихие часы сохранены: ${String(qs).padStart(2,'0')}:00–${String(qe).padStart(2,'0')}:00 МСК`);
         } else {
           const err = await res.json().catch(() => ({}));
           showToast(err.detail || 'Не удалось сохранить');
@@ -771,7 +1398,7 @@ function lotCategory(title, desc) {
       const action = el.getAttribute('data-action');
       const val = el.getAttribute('data-val') || '';
 
-      if (action === 'tab') { state.tab = val; state.detailId = null; render(); }
+      if (action === 'tab') { state.tab = val; state.detailId = null; state.animIn = true; render(); }
       else if (action === 'theme') {
         const i = THEMES.findIndex(t => t.id === state.theme);
         setThemeAction(THEMES[(i + 1) % THEMES.length].id);
@@ -797,14 +1424,14 @@ function lotCategory(title, desc) {
             const d = await r.json().catch(() => ({}));
             if (r.ok) {
               state.showPromo = false;
-              showToast('🎉 Код активирован: +' + (d.daysGranted || 30) + ' дней PRO');
+              showToast('Код активирован: +' + (d.daysGranted || 30) + ' дней PRO');
               syncState();
               render();
             } else {
-              if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger, #e05050)'; msg.textContent = d.detail || 'Код не принят'; }
+              if (msg) { msg.style.display = 'block'; msg.style.color = 'var(--danger)'; msg.textContent = d.detail || 'Код не принят'; }
             }
           } catch (e) {
-            if (msg) { msg.style.display = 'block'; msg.textContent = 'Ошибка соединения'; msg.style.color = 'var(--danger, #e05050)'; }
+            if (msg) { msg.style.display = 'block'; msg.textContent = 'Ошибка соединения'; msg.style.color = 'var(--danger)'; }
           } finally { if (btn) btn.disabled = false; }
         })();
       }
@@ -850,8 +1477,8 @@ function lotCategory(title, desc) {
         }
       }
       else if (action === 'search-reset') { state.searchQuery = ''; loadFeed(false); }
-      else if (action === 'open-detail') { state.detailId = val; window.scrollTo(0, 0); render(); }
-      else if (action === 'close-detail') { state.detailId = null; render(); }
+      else if (action === 'open-detail') { state.detailId = val; window.scrollTo(0, 0); state.animIn = true; render(); }
+      else if (action === 'close-detail') { state.detailId = null; state.animIn = true; render(); }
       else if (action === 'save-lot') { e.stopPropagation(); toggleSaveLot(val); }
       else if (action === 'claim-and-open') {
         e.stopPropagation();
@@ -876,7 +1503,7 @@ function lotCategory(title, desc) {
       else if (action === 'copy-ref') {
         if (navigator.clipboard && state.user.refLink) {
           navigator.clipboard.writeText(state.user.refLink);
-          showToast('🔗 Реферальная ссылка скопирована!');
+          showToast('Реферальная ссылка скопирована');
         }
       }
       else if (action === 'share-ref') {
@@ -903,40 +1530,40 @@ function lotCategory(title, desc) {
       const hasDiff = Number(item.profitRub) > 0;
       const viewed = getViewedIds().includes(item.id);
       return `
-        <div class="glass-card" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}" style="cursor:pointer;${viewed ? 'opacity:0.72;' : ''}">
-          <div class="row-between" style="margin-bottom: 8px;">
-            <div style="display:flex; align-items:center; gap: 7px;">
+        <article class="glass-card lot-card${viewed ? ' is-viewed' : ''}" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}">
+          <div class="lot-head">
+            <div class="lot-head-left">
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
-              <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.city)} · ${esc(item.timeAgo)}</span>
+              <span class="lot-meta">${esc(item.city)} · ${esc(item.timeAgo)}</span>
             </div>
-            ${viewed ? '<span style="font-size:10px; color:var(--text-muted); font-weight:700;">✓ Посмотрели</span>' : ''}
+            ${viewed ? '<span class="lot-viewed"><i data-lucide="eye" style="width:11px; height:11px;"></i>Посмотрели</span>' : ''}
           </div>
-          <h3 style="font-size: 15px; font-weight: 700; margin-bottom: 9px; line-height: 1.35;">${esc(item.title)}</h3>
-          <div style="display:flex; flex-wrap:wrap; gap: 6px; margin-bottom: 12px;">
-            ${(item.tags || []).map(t => `<span class="spec-tag"><i data-lucide="check-circle-2" style="width:12px; height:12px; color:var(--accent);"></i>${esc(t)}</span>`).join('')}
+          <h3 class="lot-title">${esc(item.title)}</h3>
+          <div class="lot-tags">
+            ${(item.tags || []).map(t => `<span class="spec-tag"><i data-lucide="check-circle-2" style="width:12px; height:12px; color:var(--accent-ink);"></i>${esc(t)}</span>`).join('')}
           </div>
-          <div class="row-between" style="padding: 10px 12px; border-radius: 14px; background: var(--glass-pill); margin-bottom: 12px;">
+          <div class="lot-price-row">
             <div>
-              <div class="t-num" style="font-size: 20px; font-weight: 800;">${fmt(item.price)} ₽</div>
-              <div class="t-num" style="font-size: 11px; color: var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>
+              <div class="t-num lot-price">${fmt(item.price)} ₽</div>
+              <div class="t-num lot-market">Рыночная планка: ${fmt(item.market)} ₽</div>
             </div>
             ${hasDiff
               ? `<div class="profit-pill t-num">−${esc(item.profitPct)}% · Экономия ${fmt(item.profitRub)} ₽</div>`
               : `<div class="spec-tag t-num">В рынке</div>`
             }
           </div>
-          <div class="row-between">
-            <span style="font-size: 12px; color: var(--text-secondary);">${esc(item.seller.name)} · ★ ${esc(item.seller.rating)}</span>
-            <div style="display:flex; gap:6px;">
-              <button class="btn btn-icon" style="width:34px; height:34px;" data-action="save-lot" data-val="${esc(item.id)}">
-                <i data-lucide="heart" style="width:15px; height:15px; ${isSaved ? 'fill:var(--accent); stroke:var(--accent);' : ''}"></i>
+          <div class="lot-foot">
+            <span class="lot-seller">${esc(item.seller.name)} · ★ ${esc(item.seller.rating)}</span>
+            <div class="lot-actions">
+              <button class="btn btn-icon lot-save${isSaved ? ' is-saved' : ''}" style="width:34px; height:34px;" aria-label="Сохранить лот" data-action="save-lot" data-val="${esc(item.id)}">
+                <i data-lucide="heart" style="width:15px; height:15px;"></i>
               </button>
-              <button class="btn btn-pill btn-accent" style="height:34px; padding:0 13px;" data-action="claim-and-open" data-val="${esc(item.id)}">
+              <button class="btn btn-pill btn-accent lot-claim" style="height:34px; padding:0 13px;" data-action="claim-and-open" data-val="${esc(item.id)}">
                 <span>Забрать лот</span>
               </button>
             </div>
           </div>
-        </div>
+        </article>
       `;
     }
 
@@ -953,13 +1580,20 @@ function lotCategory(title, desc) {
       }
     }
 
+    function setDockSpace(hasDock) {
+      const shell = document.getElementById('shell');
+      if (shell) shell.classList.toggle('no-dock', !hasDock);
+    }
+
     function renderInner(app) {
+      const animate = state.animIn;
+      state.animIn = false;
 
       if ((!RAW_INIT_DATA) && !state.authError) {
         app.innerHTML = `
-          <div class="screen-content" style="padding-top:44px;">
+          <div class="screen-content${animate ? ' stagger' : ''}" style="padding-top:44px;">
             <div class="glass-card" style="text-align:center; padding:28px 18px;">
-              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="send" style="width:28px; height:28px;"></i>
               </div>
               <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Открылось вне Telegram</h2>
@@ -974,15 +1608,16 @@ function lotCategory(title, desc) {
             </div>
           </div>
         `;
+        setDockSpace(false);
         if (window.lucide) lucide.createIcons();
         return;
       }
 
       if (state.authError) {
         app.innerHTML = `
-          <div class="screen-content" style="padding-top:44px;">
+          <div class="screen-content${animate ? ' stagger' : ''}" style="padding-top:44px;">
             <div class="glass-card" style="text-align:center; padding:28px 18px;">
-              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+              <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="shield-alert" style="width:28px; height:28px;"></i>
               </div>
               <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Запустите внутри Telegram</h2>
@@ -991,6 +1626,7 @@ function lotCategory(title, desc) {
             </div>
           </div>
         `;
+        setDockSpace(false);
         if (window.lucide) lucide.createIcons();
         return;
       }
@@ -1005,53 +1641,45 @@ function lotCategory(title, desc) {
               </button>
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
             </div>
-            <div class="screen-content">
+            <div class="screen-content${animate ? ' stagger' : ''}">
               <div class="glass-card">
-                <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px;">${esc(item.city)} · ${esc(item.timeAgo)}</div>
-                <h1 style="font-size:18px; font-weight:800; margin-bottom:12px; line-height:1.35;">${esc(item.title)}</h1>
-                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
+                <div class="lot-meta" style="margin-bottom:6px;">${esc(item.city)} · ${esc(item.timeAgo)}</div>
+                <h1 class="detail-title">${esc(item.title)}</h1>
+                <div class="lot-tags" style="margin-bottom:12px;">
                   ${(item.tags || []).map(t => `<span class="spec-tag">${esc(t)}</span>`).join('')}
                 </div>
-                <div class="row-between" style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
+                <div class="detail-price-row">
                   <div>
-                    <div class="t-num" style="font-size:24px; font-weight:800;">${fmt(item.price)} ₽</div>
-                    ${item.source !== 'TG' ? `<div class="t-num" style="font-size:12px; color:var(--text-muted);">Рыночная планка: ${fmt(item.market)} ₽</div>` : ''}
+                    <div class="t-num detail-price">${fmt(item.price)} ₽</div>
+                    ${item.source !== 'TG' ? `<div class="t-num detail-market">Рыночная планка: ${fmt(item.market)} ₽</div>` : ''}
                   </div>
                   ${Number(item.profitRub) > 0 ? `<div class="profit-pill t-num">Экономия ${fmt(item.profitRub)} ₽</div>` : ''}
                 </div>
                 ${item.source === 'GIFTS' ? `
-                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:rgba(255,171,64,0.12); margin-bottom:12px;">
-                  <div style="width:40px; height:40px; border-radius:12px; background:rgba(255,171,64,0.18); color:#e8a208; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                    <i data-lucide="clock" style="width:19px; height:19px;"></i>
-                  </div>
+                <div class="notice">
+                  <div class="notice-icon"><i data-lucide="clock" style="width:19px; height:19px;"></i></div>
                   <div style="flex:1; min-width:0;">
-                    <div style="font-size:13px; font-weight:700;">Подарок может уйти за минуты</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">Кнопка ниже открывает именно этот лот. Если он уже куплен — исчез с маркета, это нормально.</div>
+                    <div class="notice-title">Подарок может уйти за минуты</div>
+                    <div class="notice-sub">Кнопка ниже открывает именно этот лот. Если он уже куплен — исчез с маркета, это нормально.</div>
                   </div>
                 </div>` : ''}
                 ${item.source === 'TG' ? `
-                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:rgba(255,196,0,0.12); margin-bottom:12px;">
-                  <div style="width:40px; height:40px; border-radius:12px; background:rgba(255,196,0,0.18); color:#e8b608; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                    <i data-lucide="alert-triangle" style="width:19px; height:19px;"></i>
-                  </div>
+                <div class="notice">
+                  <div class="notice-icon"><i data-lucide="alert-triangle" style="width:19px; height:19px;"></i></div>
                   <div style="flex:1; min-width:0;">
-                    <div style="font-size:13px; font-weight:700;">Лот с бу-рынка Telegram</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">DealHunter — не гарант и не посредник. Проверяй продавца, не плати заранее.</div>
+                    <div class="notice-title">Лот с бу-рынка Telegram</div>
+                    <div class="notice-sub">DealHunter — не гарант и не посредник. Проверяй продавца, не плати заранее.</div>
                   </div>
                 </div>` : `
-                <div style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:12px;">
-                  <div style="width:40px; height:40px; border-radius:12px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-                    <i data-lucide="store" style="width:19px; height:19px;"></i>
-                  </div>
+                <div class="seller-panel">
+                  <div class="seller-avatar"><i data-lucide="store" style="width:19px; height:19px;"></i></div>
                   <div style="flex:1; min-width:0;">
-                    <div style="font-size:14px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(item.seller.name)}</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">
-                      ★ ${esc(item.seller.rating)} · ${esc(item.seller.reviews)} отзывов ${item.seller.reviews > 100 ? '· надёжный продавец' : ''}
-                    </div>
+                    <div class="seller-name">${esc(item.seller.name)}</div>
+                    <div class="seller-meta">★ ${esc(item.seller.rating)} · ${esc(item.seller.reviews)} отзывов ${item.seller.reviews > 100 ? '· надёжный продавец' : ''}</div>
                   </div>
-                  <div style="font-size:11px; color:var(--text-muted); flex-shrink:0;">Продавец<br>${esc(item.source)}</div>
+                  <div class="seller-source">Продавец<br>${esc(item.source)}</div>
                 </div>`}
-                <p style="font-size:13px; line-height:1.55; color:var(--text-secondary); margin-bottom:16px;">${esc(item.desc)}</p>
+                <p class="detail-desc">${esc(item.desc)}</p>
                 ${renderSellerCheck(item.title, item.desc)}
                 <button class="btn btn-large btn-accent" data-action="claim-and-open" data-val="${esc(item.id)}">
                   <i data-lucide="external-link" style="width:17px; height:17px;"></i>
@@ -1060,14 +1688,15 @@ function lotCategory(title, desc) {
               </div>
             </div>
           `;
+          setDockSpace(false);
           if (window.lucide) lucide.createIcons();
           return;
         }
       }
 
       const timerBadgeHtml = `
-        <div id="hdr-timer" data-action="paywall" class="t-num" style="cursor:pointer; padding:6px 11px; border-radius:11px; font-size:11px; font-weight:800; background:${state.user.subActive ? 'var(--green-soft)' : 'var(--accent-soft)'}; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
-          ${state.user.subActive ? ('PRO · ' + formatCountdown(state.user.secondsLeft)) : 'PRO истёк'}
+        <div id="hdr-timer" data-action="paywall" class="t-num timer-badge ${state.user.subActive ? 'is-pro' : 'is-expired'}">
+          ${state.user.subActive ? ('PRO · ' + formatCountdownShort(state.user.secondsLeft)) : 'PRO истёк'}
         </div>
       `;
 
@@ -1077,30 +1706,32 @@ function lotCategory(title, desc) {
         contentHtml = `
           <div class="top-header">
             <div class="row-between">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <div style="width:34px; height:34px; border-radius:11px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); display:flex; align-items:center; justify-content:center; color:var(--on-accent); box-shadow:0 4px 12px var(--accent-glow);">
+              <div class="brand">
+                <div class="brand-mark">
                   <i data-lucide="radar" style="width:18px; height:18px;"></i>
                 </div>
                 <div>
-                  <div style="font-size:16px; font-weight:800; line-height:1.1;">DealHunter</div>
-                  <div style="font-size:10px; color:var(--text-muted);">${state.updatedAt ? 'Обновлено ' + esc(state.updatedAt) : 'Радар цен'}</div>
+                  <div class="brand-name">DealHunter</div>
+                  <div class="brand-sub">${state.updatedAt ? 'Обновлено ' + esc(String(state.updatedAt).split(',').pop().trim()) : 'Радар цен'}</div>
                 </div>
               </div>
-              <div style="display:flex; align-items:center; gap:6px;">
+              <div class="hdr-actions">
                 ${timerBadgeHtml}
-                <button class="btn btn-icon" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
+                <button class="btn btn-icon" aria-label="Обновить ленту" data-action="refresh"><i data-lucide="refresh-cw" class="${state.isRefreshing ? 'spin' : ''}" style="width:15px; height:15px;"></i></button>
                 ${avatarHtml(30, 13)}
-                <button class="btn btn-icon" data-action="theme"><i data-lucide="palette" style="width:15px; height:15px;"></i></button>
+                <button class="btn btn-icon hdr-theme" aria-label="Сменить тему" data-action="theme"><i data-lucide="palette" style="width:15px; height:15px;"></i></button>
               </div>
             </div>
+          </div>
 
+          <div class="feed-controls">
             <div class="search-wrap">
               <i data-lucide="search" class="search-icon" style="width:15px; height:15px;"></i>
               <input
                 type="text"
                 id="q-input"
                 class="search-input"
-                placeholder="Что ищем (Dyson, iPhone 16, Xiaomi, LEGO)..."
+                placeholder="Поиск: iPhone, Dyson, LEGO"
                 value="${esc(state.searchQuery)}"
               />
               ${state.searchQuery ? `<button class="search-clear" data-action="search-reset"><i data-lucide="x" style="width:12px; height:12px;"></i></button>` : ''}
@@ -1127,12 +1758,12 @@ function lotCategory(title, desc) {
             <div class="row-between" style="margin-top:10px; padding: 4px 2px;">
               <span style="font-size:12px; color:var(--text-secondary); font-weight:600;">Найдено: ${state.listings.length} предложений</span>
               <button class="btn btn-pill btn-glass" style="height:30px; padding:0 12px; font-size:11px;" data-action="sort" data-val="${state.sortBy === 'profit' ? 'price_asc' : (state.sortBy === 'price_asc' ? 'date' : 'profit')}">
-                <i data-lucide="arrow-down-up" style="width:12px; height:12px; color:var(--accent);"></i>
+                <i data-lucide="arrow-down-up" style="width:12px; height:12px; color:var(--accent-ink);"></i>
                 <span>${state.sortBy === 'profit' ? 'По экономии' : (state.sortBy === 'price_asc' ? 'Сначала дешевле' : 'По новизне')}</span>
               </button>
             </div>
           </div>
-          <div class="screen-content">
+          <div class="screen-content${animate ? ' stagger' : ''}">
             ${state.listings.length
               ? state.listings.map(renderLotCard).join('')
               : '<div class="glass-card" style="text-align:center; padding:28px;">По данному запросу предложений не найдено. Попробуйте изменить название бренда или город.</div>'
@@ -1148,26 +1779,26 @@ function lotCategory(title, desc) {
       if (state.tab === 'monitors') {
         contentHtml = `
           <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Авто-мониторы</div>
+            <div class="screen-title">Авто-мониторы</div>
             <button class="btn btn-pill btn-accent" data-action="new-monitor-modal">
               <i data-lucide="plus" style="width:14px; height:14px;"></i><span>Создать</span>
             </button>
           </div>
-          <div class="screen-content">
+          <div class="screen-content${animate ? ' stagger' : ''}">
             ${state.monitors.length ? state.monitors.map(m => `
               <div class="glass-card">
                 <div class="row-between" style="margin-bottom:8px;">
                   <div>
-                    <div style="font-size:15px; font-weight:800;">${esc(m.title)}</div>
-                    <div style="font-size:12px; color:var(--text-secondary);">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · скидка от рынка ≥ ${esc(m.minMargin)}%</div>
+                    <div class="section-title">${esc(m.title)}</div>
+                    <div class="section-sub" style="font-size:12px;">${esc(m.source === 'all' ? 'Все площадки' : m.source)} · ${esc(m.city)} · скидка от рынка ≥ ${esc(m.minMargin)}%</div>
                   </div>
                   <div class="ios-switch ${m.active ? 'on' : ''}" data-action="toggle-monitor" data-val="${esc(m.id)}">
                     <div class="ios-switch-knob"></div>
                   </div>
                 </div>
                 <div class="row-between" style="padding-top:8px; border-top:1px solid var(--glass-stroke);">
-                  <span style="font-size:12px; color:var(--green); font-weight:600;">⚡ Найдено за сегодня: ${esc(m.foundToday)}</span>
-                  <button class="btn btn-icon" style="width:30px; height:30px;" data-action="delete-monitor" data-val="${esc(m.id)}">
+                  <span class="monitor-found"><i data-lucide="zap" style="width:12px; height:12px;"></i>Найдено за сегодня: ${esc(m.foundToday)}</span>
+                  <button class="btn btn-icon" style="width:30px; height:30px;" aria-label="Удалить монитор" data-action="delete-monitor" data-val="${esc(m.id)}">
                     <i data-lucide="trash-2" style="width:14px; height:14px; color:var(--text-secondary);"></i>
                   </button>
                 </div>
@@ -1181,10 +1812,10 @@ function lotCategory(title, desc) {
         const savedList = state.listings.filter(x => state.user.savedIds.includes(x.id));
         contentHtml = `
           <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Избранное (${state.user.savedIds.length})</div>
+            <div class="screen-title">Избранное (${state.user.savedIds.length})</div>
             ${timerBadgeHtml}
           </div>
-          <div class="screen-content">
+          <div class="screen-content${animate ? ' stagger' : ''}">
             ${savedList.length ? savedList.map(renderLotCard).join('') : '<div class="glass-card" style="text-align:center; padding:28px;">Сохранённых лотов пока нет</div>'}
           </div>
         `;
@@ -1193,10 +1824,10 @@ function lotCategory(title, desc) {
       if (state.tab === 'profile') {
         contentHtml = `
           <div class="top-header row-between">
-            <div style="font-size:17px; font-weight:800;">Профиль и бонусы</div>
+            <div class="screen-title">Профиль и бонусы</div>
             ${timerBadgeHtml}
           </div>
-          <div class="screen-content">
+          <div class="screen-content${animate ? ' stagger' : ''}">
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="display:flex; align-items:center; gap:10px;">
@@ -1209,9 +1840,9 @@ function lotCategory(title, desc) {
                 <span class="profit-pill">${state.user.subActive ? 'PRO АКТИВЕН' : 'FREE'}</span>
               </div>
 
-              <div style="padding:12px; border-radius:14px; background:var(--glass-pill); margin-bottom:14px;">
-                <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">Остаток времени PRO-доступа:</div>
-                <div id="prof-timer" class="t-num" style="font-size:22px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent)'};">
+              <div class="info-tile" style="padding:12px; text-align:left; margin-bottom:14px;">
+                <div class="info-tile-label" style="margin-bottom:4px;">Остаток времени PRO-доступа:</div>
+                <div id="prof-timer" class="t-num" style="font-size:22px; font-weight:800; color:${state.user.subActive ? 'var(--green)' : 'var(--accent-ink)'};">
                   ${formatCountdown(state.user.secondsLeft)}
                 </div>
               </div>
@@ -1227,24 +1858,21 @@ function lotCategory(title, desc) {
               </button>
 
               <div class="glass-card" style="margin-top:14px;">
-                <div class="row-between" style="margin-bottom:10px;">
+                <div class="row-between" style="margin-bottom:12px;">
                   <div style="display:flex; align-items:center; gap:8px;">
-                    <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                      <i data-lucide="palette" style="width:17px; height:17px;"></i>
-                    </div>
+                    <div class="section-icon"><i data-lucide="palette" style="width:17px; height:17px;"></i></div>
                     <div>
-                      <div style="font-size:15px; font-weight:800;">Оформление</div>
-                      <div style="font-size:11px; color:var(--text-secondary);">Выбери свою тему интерфейса</div>
+                      <div class="section-title">Оформление</div>
+                      <div class="section-sub">Выбери тему интерфейса</div>
                     </div>
                   </div>
                 </div>
-                <div style="display:flex; flex-wrap:wrap; gap:10px;">
+                <div class="theme-grid">
                   ${THEMES.map(t => `
-                    <button class="btn btn-pill ${state.theme === t.id ? 'btn-accent' : 'btn-glass'}" style="height:44px; padding:0 14px; display:flex; align-items:center; gap:9px;" data-action="set-theme" data-val="${t.id}">
-                      <span style="width:22px; height:22px; border-radius:50%; display:inline-flex; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,0.4); flex-shrink:0;">
-                        <span style="width:50%; height:100%; background:${t.accent}; display:inline-block;"></span><span style="width:50%; height:100%; background:${t.bg}; display:inline-block;"></span>
-                      </span>
-                      <span style="font-size:12px; font-weight:700;">${t.name}</span>
+                    <button class="theme-option ${state.theme === t.id ? 'is-active' : ''}" style="--sw-bg:${t.bg}; --sw-accent:${t.accent};" aria-label="Тема ${t.name}" aria-pressed="${state.theme === t.id}" data-action="set-theme" data-val="${t.id}">
+                      <span class="theme-swatch" aria-hidden="true"></span>
+                      <span class="theme-name">${t.name}</span>
+                      <span class="theme-check"><i data-lucide="check" style="width:11px; height:11px;"></i></span>
                     </button>
                   `).join('')}
                 </div>
@@ -1258,25 +1886,23 @@ function lotCategory(title, desc) {
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:10px;">
                 <div style="display:flex; align-items:center; gap:8px;">
-                  <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                    <i data-lucide="moon-star" style="width:17px; height:17px;"></i>
-                  </div>
+                  <div class="section-icon"><i data-lucide="moon-star" style="width:17px; height:17px;"></i></div>
                   <div>
-                    <div style="font-size:15px; font-weight:800;">Тихие часы</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">Пуши не приходят в это окно (по Москве)</div>
+                    <div class="section-title">Тихие часы</div>
+                    <div class="section-sub">Пуши не приходят в это окно (по Москве)</div>
                   </div>
                 </div>
               </div>
               <div style="display:flex; gap:8px; align-items:flex-end;">
                 <div style="flex:1;">
                   <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">С</div>
-                  <select id="quiet-start" class="input-glass" style="width:100%; height:40px;">
+                  <select id="quiet-start" class="input-glass" style="width:100%; height:40px; margin-bottom:0;">
                     ${Array.from(Array(24).keys()).map(h => `<option value="${h}" ${state.user.quietStart === h ? 'selected' : ''}>${String(h).padStart(2,'0')}:00</option>`).join('')}
                   </select>
                 </div>
                 <div style="flex:1;">
                   <div style="font-size:11px; color:var(--text-secondary); margin-bottom:4px;">До</div>
-                  <select id="quiet-end" class="input-glass" style="width:100%; height:40px;">
+                  <select id="quiet-end" class="input-glass" style="width:100%; height:40px; margin-bottom:0;">
                     ${Array.from(Array(24).keys()).map(h => `<option value="${h}" ${state.user.quietEnd === h ? 'selected' : ''}>${String(h).padStart(2,'0')}:00</option>`).join('')}
                   </select>
                 </div>
@@ -1290,28 +1916,26 @@ function lotCategory(title, desc) {
             <div class="glass-card">
               <div class="row-between" style="margin-bottom:8px;">
                 <div style="display:flex; align-items:center; gap:8px;">
-                  <div style="width:32px; height:32px; border-radius:10px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center;">
-                    <i data-lucide="users" style="width:17px; height:17px;"></i>
-                  </div>
+                  <div class="section-icon"><i data-lucide="users" style="width:17px; height:17px;"></i></div>
                   <div>
-                    <div style="font-size:15px; font-weight:800;">Реферальная программа</div>
-                    <div style="font-size:11px; color:var(--text-secondary);">+${esc(state.user.refBonus || 3)} дня PRO за друга (${esc(state.user.refMonthDays)}/${esc(state.user.refMonthLimit)} дн. в мес.)</div>
+                    <div class="section-title">Реферальная программа</div>
+                    <div class="section-sub">+${esc(state.user.refBonus || 3)} дня PRO за друга (${esc(state.user.refMonthDays)}/${esc(state.user.refMonthLimit)} дн. в мес.)</div>
                   </div>
                 </div>
               </div>
 
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin: 12px 0;">
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800;">${esc(state.user.refCount)}</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Приглашено друзей</div>
+                <div class="info-tile">
+                  <div class="t-num info-value">${esc(state.user.refCount)}</div>
+                  <div class="info-tile-label">Приглашено друзей</div>
                 </div>
-                <div style="padding:10px 12px; border-radius:14px; background:var(--glass-pill); text-align:center;">
-                  <div class="t-num" style="font-size:20px; font-weight:800; color:var(--green);">+${esc(state.user.refDaysEarned)} дн.</div>
-                  <div style="font-size:11px; color:var(--text-secondary);">Бонусных дней PRO</div>
+                <div class="info-tile">
+                  <div class="t-num info-value" style="color:var(--green);">+${esc(state.user.refDaysEarned)} дн.</div>
+                  <div class="info-tile-label">Бонусных дней PRO</div>
                 </div>
               </div>
 
-              <div style="padding:10px 12px; border-radius:12px; background:var(--glass-pill); font-size:11px; color:var(--text-secondary); word-break:break-all; margin-bottom:10px;">
+              <div class="ref-link">
                 ${esc(state.user.refLink)}
               </div>
 
@@ -1326,18 +1950,18 @@ function lotCategory(title, desc) {
             </div>
 
             <div class="glass-card">
-              <div style="font-size:13px; font-weight:700; margin-bottom:10px;">Правовая информация</div>
+              <div class="section-title" style="font-size:13px; margin-bottom:10px;">Правовая информация</div>
               <div class="legal-row-note" style="font-size:11px; color:var(--text-muted); margin-top:10px; text-align:center;">
                 Независимый сервис радара бу-лотов и подарков
               </div>
               <div style="display:flex; flex-direction:column; gap:8px;">
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="privacy">
+                <button class="btn btn-glass legal-btn" data-action="legal" data-val="privacy">
                   <span>Политика конфиденциальности</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
                 </button>
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px;" data-action="legal" data-val="terms">
+                <button class="btn btn-glass legal-btn" data-action="legal" data-val="terms">
                   <span>Пользовательское соглашение</span><i data-lucide="chevron-right" style="width:15px; height:15px;"></i>
                 </button>
-                <button class="btn btn-glass" style="height:40px; border-radius:12px; justify-content:space-between; padding:0 12px; font-size:12px; color:#ff6b6b;" data-action="delete-me-ask">
+                <button class="btn btn-glass legal-btn is-danger" data-action="delete-me-ask">
                   <span>Удалить мои данные</span><i data-lucide="trash-2" style="width:15px; height:15px;"></i>
                 </button>
               </div>
@@ -1352,7 +1976,7 @@ function lotCategory(title, desc) {
         modalHtml = `
           <div class="modal-backdrop modal-center">
             <div class="modal-card" style="text-align:left;">
-              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="file-text" style="width:32px; height:32px;"></i>
               </div>
               <h2 style="font-size:20px; font-weight:800; text-align:center; margin-bottom:10px;">Условия использования</h2>
@@ -1377,7 +2001,7 @@ function lotCategory(title, desc) {
       if (!state.user.trialClaimed) {
         modalHtml = `          <div class="modal-backdrop modal-center">
             <div class="modal-card" style="text-align:center;">
-              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+              <div style="width:64px; height:64px; border-radius:20px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
                 <i data-lucide="gift" style="width:32px; height:32px;"></i>
               </div>
               <div class="profit-pill" style="margin-bottom:10px;">WELCOME BONUS</div>
@@ -1399,17 +2023,22 @@ function lotCategory(title, desc) {
             <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="font-size:17px; font-weight:800;">Новый авто-монитор</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+                <button class="btn btn-icon" data-action="close-modal" aria-label="Закрыть"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
-              <input type="text" id="m-title" class="input-glass" placeholder="Что отслеживаем (iPhone 16, LEGO, Dyson)..." />
+              <div class="field-label">Что отслеживаем</div>
+              <input type="text" id="m-title" class="input-glass" placeholder="iPhone 16, LEGO, Dyson..." />
+              <div class="field-label">Город</div>
               <select id="m-city" class="input-glass">${CITIES.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
+              <div class="field-label">Площадка</div>
               <select id="m-source" class="input-glass">
                 <option value="all">Все площадки (Бу рынок + Подарки)</option>
                 <option value="TG">Только Бу рынок</option>
                 <option value="GIFTS">Только Подарки</option>
               </select>
-              <input type="number" id="m-margin" class="input-glass" placeholder="Мин. выгода от рынка (%)" value="15" />
-              <input type="text" id="m-extra" class="input-glass" placeholder="Уточнения через запятую: 256 ГБ, отличное, синий (не обязательно)" />
+              <div class="field-label">Минимальная выгода от рынка, %</div>
+              <input type="number" id="m-margin" class="input-glass" inputmode="numeric" min="1" max="90" placeholder="15" value="15" />
+              <div class="field-label">Уточнения (необязательно)</div>
+              <input type="text" id="m-extra" class="input-glass" placeholder="256 ГБ, синий, отличное состояние" />
               <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
                 <i data-lucide="check" style="width:18px; height:18px;"></i>
                 <span>Запустить мониторинг</span>
@@ -1423,7 +2052,7 @@ function lotCategory(title, desc) {
             <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <span class="profit-pill">DealHunter PRO</span>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+                <button class="btn btn-icon" data-action="close-modal" aria-label="Закрыть"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
               <div class="t-num" style="font-size:26px; font-weight:800; margin-bottom:6px;">350 Stars <span style="font-size:13px; color:var(--text-muted);">/ 30 дней</span></div>
               <p style="font-size:13px; color:var(--text-secondary); line-height:1.45; margin-bottom:16px;">
@@ -1449,7 +2078,7 @@ function lotCategory(title, desc) {
             <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="font-size:17px; font-weight:800;">Активация кода</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+                <button class="btn btn-icon" data-action="close-modal" aria-label="Закрыть"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
               <input type="text" id="promo-code" class="input-glass" placeholder="DH-XXXXXXXX-XXXXXXXX" autocomplete="off" />
               <div id="promo-msg" style="font-size:12px; color:var(--text-secondary); margin:6px 2px 0; display:none;"></div>
@@ -1465,8 +2094,8 @@ function lotCategory(title, desc) {
           <div class="modal-backdrop" data-action="close-modal">
             <div class="modal-sheet" style="max-width:420px;">
               <div class="row-between" style="margin-bottom:12px;">
-                <div style="font-size:15px; font-weight:800; color:#ff6b6b;">Удалить мои данные?</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+                <div style="font-size:15px; font-weight:800; color:var(--danger);">Удалить мои данные?</div>
+                <button class="btn btn-icon" data-action="close-modal" aria-label="Закрыть"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
               <div style="font-size:13px; color:var(--text-secondary); line-height:1.6; margin-bottom:16px;">
                 Будут удалены навсегда: профиль, мониторы, настройка тихих часов, подписка PRO и история.
@@ -1474,7 +2103,7 @@ function lotCategory(title, desc) {
               </div>
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
                 <button class="btn btn-large btn-glass" data-action="close-modal">Отмена</button>
-                <button class="btn btn-large" style="background:rgba(255,107,107,0.18); color:#ff6b6b;" data-action="delete-me-confirm">Удалить всё</button>
+                <button class="btn btn-large" style="background:var(--danger-soft); color:var(--danger); border:1px solid var(--danger-soft);" data-action="delete-me-confirm">Удалить всё</button>
               </div>
             </div>
           </div>
@@ -1496,7 +2125,7 @@ function lotCategory(title, desc) {
             <div class="modal-sheet">
               <div class="row-between" style="margin-bottom:12px;">
                 <div style="font-size:15px; font-weight:800;">${esc(d.t)}</div>
-                <button class="btn btn-icon" data-action="close-modal"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
+                <button class="btn btn-icon" data-action="close-modal" aria-label="Закрыть"><i data-lucide="x" style="width:16px; height:16px;"></i></button>
               </div>
               <div style="font-size:12px; color:var(--text-secondary); line-height:1.6; white-space:pre-line; margin-bottom:16px;">${esc(d.b)}</div>
               <button class="btn btn-large btn-glass" data-action="close-modal">Понятно</button>
@@ -1525,6 +2154,7 @@ function lotCategory(title, desc) {
       `;
 
       app.innerHTML = (contentHtml || '') + (modalHtml || '') + dockHtml;
+      setDockSpace(true);
       if (window.lucide) lucide.createIcons();
     }
 
