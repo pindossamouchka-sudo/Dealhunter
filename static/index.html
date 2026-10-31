@@ -1857,51 +1857,40 @@
     .cv-corner.br { right: 15px; bottom: 15px; border-right: 2px solid var(--accent-ink); border-bottom: 2px solid var(--accent-ink); }
 
     /* ---------- 3D-АРТЕФАКТ ---------- */
+    /* ---------- сезонный орнамент на обложке (вместо сферы) ---------- */
     .cv-object {
-      position: absolute; z-index: 0; right: -34px; top: 19%;
-      width: clamp(210px, 62vw, 300px); height: clamp(210px, 62vw, 300px);
+      position: absolute; z-index: 0; right: -26px; top: 12%;
+      width: clamp(230px, 66vw, 320px); height: clamp(230px, 66vw, 320px);
       pointer-events: none;
-      --obj-a: var(--orb-a); --obj-b: var(--orb-b); --obj-c: rgba(var(--edge), 0.95);
     }
-    .deck-card.is-pearl .cv-object { --obj-a: #EFD9A8; --obj-b: var(--pearl-ink); --obj-c: rgba(255, 250, 240, 0.95); right: -48px; }
-    .cv-glow {
-      position: absolute; inset: -26%;
-      background: radial-gradient(circle, var(--orb-glow) 0%, transparent 62%);
-      transform: translate3d(0, 0, 0);
-      animation: halo-breathe 7s var(--ease-smooth) infinite alternate;
+    .iz {
+      position: absolute; display: none; opacity: 0;
+      aspect-ratio: 1;
+      background-size: contain; background-repeat: no-repeat; background-position: center;
     }
-    .deck-card.is-pearl .cv-glow { background: radial-gradient(circle, rgba(var(--gold-rgb), 0.30) 0%, transparent 62%); }
-    @keyframes halo-breathe { from { opacity: 0.7; transform: scale(0.94); } to { opacity: 1; transform: scale(1.05); } }
-    .cv-ring {
-      position: absolute; inset: -12%;
-      border-radius: 50%;
-      border: 1px solid rgba(var(--edge), 0.20);
-      transform: rotate3d(1, -0.35, 0, 62deg);
+    html[data-theme='summer'] .iz.f1, html[data-theme='summer'] .iz.f2 { display: block; opacity: 0.95; }
+    html[data-theme='autumn'] .iz.m1, html[data-theme='autumn'] .iz.m2, html[data-theme='autumn'] .iz.m3 { display: block; opacity: 0.97; }
+    html[data-theme='winter'] .iz.w1, html[data-theme='winter'] .iz.w2 { display: block; opacity: 0.95; }
+
+    .iz.m1 { left: -10%; top: 16%; width: 68%; --rot: -10deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); animation: orn-bob 7s var(--ease-smooth) infinite alternate; }
+    .iz.m2 { right: -12%; top: -4%; width: 42%; --rot: 26deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); animation: orn-bob 9s var(--ease-smooth) -3s infinite alternate; }
+    .iz.m3 { right: 2%; bottom: -8%; width: 32%; --rot: 42deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); animation: orn-bob 8s var(--ease-smooth) -5s infinite alternate; }
+    .iz.f1 { left: -8%; top: 10%; width: 62%; --rot: -7deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20fill%3D%22%23F2A9C6%22%20stroke%3D%22%23FFF3F8%22%20stroke-width%3D%223%22%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%2872%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28144%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28216%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28288%29%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%2212.5%22%20fill%3D%22%23FFD35C%22%20stroke%3D%22%23FFF3F8%22%20stroke-width%3D%223%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); animation: orn-bob 8s var(--ease-smooth) infinite alternate; }
+    .iz.f2 { right: -9%; bottom: 12%; width: 38%; --rot: 15deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20fill%3D%22%23FFD66B%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%2872%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28144%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28216%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28288%29%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%2212.5%22%20fill%3D%22%23E5893F%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); animation: orn-bob 9s var(--ease-smooth) -4s infinite alternate; }
+    .iz.w1 { left: 6%; top: 6%; width: 88%; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20stroke%3D%22%23F2FAFF%22%20stroke-width%3D%224.5%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M50%204%20V96%22%2F%3E%3Cpath%20d%3D%22M12%2027%20L88%2073%22%2F%3E%3Cpath%20d%3D%22M12%2073%20L88%2027%22%2F%3E%3Cpath%20d%3D%22M39%2015%20L50%2026%20L61%2015%22%2F%3E%3Cpath%20d%3D%22M39%2085%20L50%2074%20L61%2085%22%2F%3E%3Cpath%20d%3D%22M20%2034%20L32%2040%20L34%2027%22%2F%3E%3Cpath%20d%3D%22M80%2066%20L68%2060%20L66%2073%22%2F%3E%3Cpath%20d%3D%22M20%2066%20L32%2060%20L34%2073%22%2F%3E%3Cpath%20d%3D%22M80%2034%20L68%2040%20L66%2027%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%227%22%20fill%3D%22%23F2FAFF%22%2F%3E%3C%2Fsvg%3E"); animation: orn-spin 46s linear infinite; }
+    .iz.w2 { left: -8%; bottom: -4%; width: 30%; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20stroke%3D%22%23D9EDFB%22%20stroke-width%3D%224.5%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M50%204%20V96%22%2F%3E%3Cpath%20d%3D%22M12%2027%20L88%2073%22%2F%3E%3Cpath%20d%3D%22M12%2073%20L88%2027%22%2F%3E%3Cpath%20d%3D%22M39%2015%20L50%2026%20L61%2015%22%2F%3E%3Cpath%20d%3D%22M39%2085%20L50%2074%20L61%2085%22%2F%3E%3Cpath%20d%3D%22M20%2034%20L32%2040%20L34%2027%22%2F%3E%3Cpath%20d%3D%22M80%2066%20L68%2060%20L66%2073%22%2F%3E%3Cpath%20d%3D%22M20%2066%20L32%2060%20L34%2073%22%2F%3E%3Cpath%20d%3D%22M80%2034%20L68%2040%20L66%2027%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%227%22%20fill%3D%22%23D9EDFB%22%2F%3E%3C%2Fsvg%3E"); animation: orn-spin 58s linear infinite reverse; }
+    html[data-theme='winter'] .deck-card.is-pearl .iz { filter: drop-shadow(0 2px 5px rgba(46, 92, 138, 0.45)); }
+
+    @keyframes orn-bob {
+      from { transform: rotate(var(--rot, 0deg)) translate3d(0, -7px, 0); }
+      to { transform: rotate(var(--rot, 0deg)) translate3d(0, 11px, 0); }
     }
-    .deck-card.is-pearl .cv-ring { border-color: rgba(var(--ink), 0.25); }
-    .cv-ring.r2 { inset: -26%; border-color: rgba(var(--edge), 0.10); animation: ring-slow 26s linear infinite; }
-    @keyframes ring-slow { from { transform: rotate3d(1, -0.35, 0, 62deg) rotate(0deg); } to { transform: rotate3d(1, -0.35, 0, 62deg) rotate(360deg); } }
-    .cv-sphere {
-      position: absolute; inset: 12%;
-      border-radius: 50%;
-      background:
-        radial-gradient(circle at 30% 26%, var(--obj-c) 0%, rgba(255, 255, 255, 0) 24%),
-        radial-gradient(circle at 72% 80%, rgba(255, 255, 255, 0.16) 0%, transparent 46%),
-        radial-gradient(circle at 48% 42%, var(--obj-a) 0%, var(--obj-b) 72%);
-      box-shadow:
-        0 40px 80px -28px rgba(2, 3, 8, 0.9),
-        inset -22px -30px 60px rgba(2, 3, 8, 0.55),
-        inset 12px 16px 34px rgba(255, 255, 255, 0.22);
-      transform: translate3d(0, 0, 0);
-      animation: sphere-hover 9s var(--ease-smooth) infinite alternate;
+    @keyframes orn-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
-    @keyframes sphere-hover { from { transform: translate3d(0, -5px, 0); } to { transform: translate3d(0, 9px, 0); } }
-    .cv-sphere::after {
-      content: ''; position: absolute; inset: 0; border-radius: 50%;
-      background: conic-gradient(from 0deg, transparent 0deg, rgba(255, 255, 255, 0.20) 40deg, transparent 90deg, transparent 200deg, rgba(255, 255, 255, 0.12) 250deg, transparent 300deg);
-      animation: shine-spin 8s linear infinite;
-    }
-    @keyframes shine-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+
 
     /* ---------- контент обложки ---------- */
     .cv-head, .cv-kicker, .cv-title, .cv-tags, .cv-price, .cv-profit, .cv-cta, .cv-foot {
@@ -2457,14 +2446,13 @@
     }
     html[data-theme='autumn'] #bg-nature { --na: leaf-fall; }
     html[data-theme='autumn'] #bg-nature i {
-      width: 13px; height: 13px;
-      border-radius: 14% 0 14% 0;
-      background: linear-gradient(135deg, #D98B3E, #9E5318);
+      width: 17px; height: 17px; border-radius: 0;
+      background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
     }
     html[data-theme='winter'] #bg-nature { --na: snow-fall; }
     html[data-theme='winter'] #bg-nature i {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0.2) 95%);
+      width: 10px; height: 10px; border-radius: 0;
+      background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20stroke%3D%22%23F2FAFF%22%20stroke-width%3D%224.5%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M50%204%20V96%22%2F%3E%3Cpath%20d%3D%22M12%2027%20L88%2073%22%2F%3E%3Cpath%20d%3D%22M12%2073%20L88%2027%22%2F%3E%3Cpath%20d%3D%22M39%2015%20L50%2026%20L61%2015%22%2F%3E%3Cpath%20d%3D%22M39%2085%20L50%2074%20L61%2085%22%2F%3E%3Cpath%20d%3D%22M20%2034%20L32%2040%20L34%2027%22%2F%3E%3Cpath%20d%3D%22M80%2066%20L68%2060%20L66%2073%22%2F%3E%3Cpath%20d%3D%22M20%2066%20L32%2060%20L34%2073%22%2F%3E%3Cpath%20d%3D%22M80%2034%20L68%2040%20L66%2027%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%227%22%20fill%3D%22%23F2FAFF%22%2F%3E%3C%2Fsvg%3E");
     }
     html.low-perf #bg-nature i, html[data-theme='summer'] #bg-nature i:nth-child(n+9) { display: none; }
 
@@ -2487,15 +2475,28 @@
       100% { opacity: 0; transform: translate3d(4vw, -104vh, 0) scale(1.3); }
     }
 
-    /* ---------- сезонный дождь при смене вкладок ---------- */
-    #season-rain {
-      position: fixed; inset: 0; overflow: hidden;
-      pointer-events: none; z-index: 600;
+    /* ---------- сезонный переход: фигурки + вуаль ---------- */
+    #season-rain .sp {
+      position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none;
+      background-size: contain; background-repeat: no-repeat; background-position: center;
+      will-change: transform, opacity;
     }
-    #season-rain i { position: absolute; top: -34px; display: block; opacity: 0; border-radius: 50%; }
-    #season-rain i.leaf { border-radius: 14% 0 14% 0; background: linear-gradient(135deg, #D98B3E, #9E5318); }
-    #season-rain i.snow { background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.35) 100%); }
-    #season-rain i.petal { background: radial-gradient(circle at 35% 30%, #F0EAC8, #B8D27C); border-radius: 60% 40% 55% 45%; }
+    #season-rain .sp-m1 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23E0953F%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%239E5318%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-m2 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23C9782E%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%237E4310%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-m3 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2055%29%22%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-72%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%28-36%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2836%29%22%2F%3E%3Cpath%20d%3D%22M0%20-47%20C9%20-41%2011%20-28%207.5%20-18%20C5.5%20-10.5%20-5.5%20-10.5%20-7.5%20-18%20C-11%20-28%20-9%20-41%200%20-47%20Z%22%20fill%3D%22%23EFBE63%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%223.5%22%20stroke-linejoin%3D%22round%22%20transform%3D%22rotate%2872%29%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M50%2050%20Q49%2074%2045%2096%22%20stroke%3D%22%23A5621A%22%20stroke-width%3D%224.5%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-s1 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20stroke%3D%22%23F2FAFF%22%20stroke-width%3D%224.5%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M50%204%20V96%22%2F%3E%3Cpath%20d%3D%22M12%2027%20L88%2073%22%2F%3E%3Cpath%20d%3D%22M12%2073%20L88%2027%22%2F%3E%3Cpath%20d%3D%22M39%2015%20L50%2026%20L61%2015%22%2F%3E%3Cpath%20d%3D%22M39%2085%20L50%2074%20L61%2085%22%2F%3E%3Cpath%20d%3D%22M20%2034%20L32%2040%20L34%2027%22%2F%3E%3Cpath%20d%3D%22M80%2066%20L68%2060%20L66%2073%22%2F%3E%3Cpath%20d%3D%22M20%2066%20L32%2060%20L34%2073%22%2F%3E%3Cpath%20d%3D%22M80%2034%20L68%2040%20L66%2027%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%227%22%20fill%3D%22%23F2FAFF%22%2F%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-s2 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20stroke%3D%22%23D9EDFB%22%20stroke-width%3D%224.5%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%3E%3Cpath%20d%3D%22M50%204%20V96%22%2F%3E%3Cpath%20d%3D%22M12%2027%20L88%2073%22%2F%3E%3Cpath%20d%3D%22M12%2073%20L88%2027%22%2F%3E%3Cpath%20d%3D%22M39%2015%20L50%2026%20L61%2015%22%2F%3E%3Cpath%20d%3D%22M39%2085%20L50%2074%20L61%2085%22%2F%3E%3Cpath%20d%3D%22M20%2034%20L32%2040%20L34%2027%22%2F%3E%3Cpath%20d%3D%22M80%2066%20L68%2060%20L66%2073%22%2F%3E%3Cpath%20d%3D%22M20%2066%20L32%2060%20L34%2073%22%2F%3E%3Cpath%20d%3D%22M80%2034%20L68%2040%20L66%2027%22%2F%3E%3C%2Fg%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%227%22%20fill%3D%22%23D9EDFB%22%2F%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-f1 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20fill%3D%22%23F2A9C6%22%20stroke%3D%22%23FFF3F8%22%20stroke-width%3D%223%22%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%2872%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28144%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28216%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28288%29%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%2212.5%22%20fill%3D%22%23FFD35C%22%20stroke%3D%22%23FFF3F8%22%20stroke-width%3D%223%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); }
+    #season-rain .sp-f2 { background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20fill%3D%22%23FFD66B%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%2872%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28144%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28216%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28288%29%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%2212.5%22%20fill%3D%22%23E5893F%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); }
+
+    #season-rain .rain-veil {
+      position: absolute; inset: 0; opacity: 0; pointer-events: none;
+      background: radial-gradient(92% 68% at 50% 46%, var(--rain-tint, transparent) 0%, transparent 68%);
+    }
+    [data-theme='summer'] #season-rain .rain-veil { --rain-tint: rgba(126, 160, 62, 0.20); }
+    [data-theme='autumn'] #season-rain .rain-veil { --rain-tint: rgba(226, 161, 92, 0.22); }
+    [data-theme='winter'] #season-rain .rain-veil { --rain-tint: rgba(159, 208, 242, 0.22); }
+
 
 
   </style>
@@ -2868,35 +2869,71 @@ function lotCategory(title, desc) {
       if (!box) return;
       let reduced = false;
       try { reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
-      if (reduced || box.childElementCount > 24) return;
-      const kind = state.theme === 'summer' ? 'petal' : (state.theme === 'winter' ? 'snow' : 'leaf');
-      const H = window.innerHeight || 800;
-      for (let k = 0; k < 12; k++) {
-        const i = document.createElement('i');
-        i.className = kind;
-        const size = kind === 'snow' ? 5 + Math.random() * 4 : 8 + Math.random() * 6;
-        i.style.left = (4 + Math.random() * 92) + '%';
-        i.style.width = size.toFixed(1) + 'px';
-        i.style.height = size.toFixed(1) + 'px';
-        box.appendChild(i);
-        const drift = Math.random() * 76 - 38;
-        const spin = kind === 'snow' ? 0 : (Math.random() * 460 - 230);
+      if (reduced) return;
+      const low = document.documentElement.classList.contains('low-perf');
+      if (box.childElementCount > 40) return;
+
+      /* мягкая вуаль — «прошло у объектива камеры» */
+      let veil = box.querySelector('.rain-veil');
+      if (!veil) {
+        veil = document.createElement('div');
+        veil.className = 'rain-veil';
+        box.appendChild(veil);
+      }
+      try {
+        veil.animate([
+          { opacity: 0 },
+          { opacity: 1, offset: 0.42 },
+          { opacity: 0 }
+        ], { duration: 2000, easing: 'ease-in-out' });
+      } catch (e) {}
+
+      const pool = state.theme === 'summer'
+        ? ['sp-f1', 'sp-f2']
+        : (state.theme === 'winter' ? ['sp-s1', 'sp-s2'] : ['sp-m1', 'sp-m2', 'sp-m3']);
+      const N = low ? 14 : 30;
+      const NX = [-16, 116];
+      const NY = [-14, 112];
+
+      for (let k = 0; k < N; k++) {
+        const el = document.createElement('i');
+        el.className = 'sp ' + pool[k % pool.length];
+        const size = 26 + Math.random() * 24;
+        el.style.width = size.toFixed(0) + 'px';
+        el.style.height = size.toFixed(0) + 'px';
+        box.appendChild(el);
+
+        /* с углов к центру (крупно, «мимо объектива»), затем плавно в бока */
+        const cx = NX[Math.random() < 0.5 ? 0 : 1] + (Math.random() * 30 - 15);
+        const cy = NY[Math.random() < 0.5 ? 0 : 1] + (Math.random() * 24 - 12);
+        const px = 50 + (Math.random() * 22 - 11);
+        const py = 44 + (Math.random() * 20 - 10);
+        const ex = (Math.random() < 0.5 ? -1 : 1) * (110 + Math.random() * 70);
+        const ey = py + (Math.random() * 46 - 23);
+        const spk = (state.theme === 'winter' ? 1.7 : 1.45) + Math.random() * 0.95;
+        const r0 = Math.random() * 360;
+        const r1 = r0 + (Math.random() * 160 - 80);
+        const r3 = r1 + (Math.random() * 220 - 110);
+        const delay = (k % 4) * 130 + Math.random() * 110;
+        const dur = 1750 + Math.random() * 550;
+
         try {
-          const anim = i.animate([
-            { opacity: 0, transform: 'translate3d(0, -30px, 0) rotate(0deg)' },
-            { opacity: 0.85, transform: 'translate3d(' + (drift * 0.3).toFixed(0) + 'px, ' + (H * 0.3).toFixed(0) + 'px, 0) rotate(' + (spin * 0.3).toFixed(0) + 'deg)', offset: 0.25 },
-            { opacity: 0.9, transform: 'translate3d(' + drift.toFixed(0) + 'px, ' + (H + 60).toFixed(0) + 'px, 0) rotate(' + spin.toFixed(0) + 'deg)' }
+          el.animate([
+            { opacity: 0, transform: 'translate3d(' + cx.toFixed(0) + 'vw, ' + cy.toFixed(0) + 'vh, 0) scale(0.35) rotate(' + r0.toFixed(0) + 'deg)' },
+            { opacity: 1, transform: 'translate3d(' + px.toFixed(0) + 'vw, ' + py.toFixed(0) + 'vh, 0) scale(' + spk.toFixed(2) + ') rotate(' + r1.toFixed(0) + 'deg)', offset: 0.4 },
+            { opacity: 0.95, transform: 'translate3d(' + px.toFixed(0) + 'vw, ' + (py + 5).toFixed(0) + 'vh, 0) scale(' + (spk * 0.92).toFixed(2) + ') rotate(' + (r1 + 12).toFixed(0) + 'deg)', offset: 0.62 },
+            { opacity: 0, transform: 'translate3d(' + ex.toFixed(0) + 'vw, ' + ey.toFixed(0) + 'vh, 0) scale(0.6) rotate(' + r3.toFixed(0) + 'deg)' }
           ], {
-            duration: kind === 'snow' ? 1250 + Math.random() * 550 : 1050 + Math.random() * 500,
-            delay: k * 55,
-            easing: 'cubic-bezier(0.3, 0.05, 0.65, 1)',
+            duration: dur,
+            delay: delay,
+            easing: 'cubic-bezier(0.55, 0.05, 0.45, 0.95)',
             fill: 'both'
           });
-          anim.onfinish = () => { if (i.parentNode) i.parentNode.removeChild(i); };
-          setTimeout(() => { if (i.parentNode) i.parentNode.removeChild(i); }, (kind === 'snow' ? 1850 : 1600) + k * 55 + 120);
         } catch (e) {
-          if (i.parentNode) i.parentNode.removeChild(i);
+          el.remove();
+          continue;
         }
+        setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, delay + dur + 300);
       }
     }
 
@@ -3331,7 +3368,7 @@ function lotCategory(title, desc) {
         <article class="deck-card ${tone}${viewed ? ' is-viewed' : ''}" id="lot-card-${esc(item.id)}">
           <span class="cv-frame" aria-hidden="true"></span>
           <i class="cv-corner tl" aria-hidden="true"></i><i class="cv-corner br" aria-hidden="true"></i>
-          <div class="cv-object" aria-hidden="true"><span class="cv-glow"></span><span class="cv-ring"></span><span class="cv-ring r2"></span><span class="cv-sphere"></span></div>
+          <div class="cv-object" aria-hidden="true"><span class="iz m1"></span><span class="iz m2"></span><span class="iz m3"></span><span class="iz f1"></span><span class="iz f2"></span><span class="iz w1"></span><span class="iz w2"></span></div>
 
           <header class="cv-head">
             <span class="cv-issue t-num">${no}<i>/${String(total).padStart(2, '0')}</i></span>
@@ -3642,7 +3679,7 @@ function lotCategory(title, desc) {
               : `<article class="deck-card is-active">
                    <span class="cv-frame" aria-hidden="true"></span>
                    <i class="cv-corner tl" aria-hidden="true"></i><i class="cv-corner br" aria-hidden="true"></i>
-                   <div class="cv-object" aria-hidden="true"><span class="cv-glow"></span><span class="cv-ring"></span><span class="cv-sphere"></span></div>
+                   <div class="cv-object" aria-hidden="true"><span class="iz m1"></span><span class="iz m2"></span><span class="iz m3"></span><span class="iz f1"></span><span class="iz f2"></span><span class="iz w1"></span><span class="iz w2"></span></div>
                    <header class="cv-head"><span class="cv-issue t-num">00<i>/00</i></span><span class="cv-src t-num">${esc(state.city)}</span></header>
                    <p class="cv-kicker">Пусто</p>
                    <h2 class="cv-title">Ничего не нашли.</h2>
