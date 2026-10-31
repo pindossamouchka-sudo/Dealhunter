@@ -1673,7 +1673,7 @@
       --font-display: 'Unbounded', 'Inter', system-ui, sans-serif;
       --font-editor: 'Playfair Display', Georgia, serif;
 
-      --bg-canvas: #03040A;
+      --bg-canvas: var(--bg-fade);
       --bg-app: #07080F;
       --bg-deep: #05060C;
       --surface-1: #0C0E18;
@@ -1688,31 +1688,31 @@
       --glass-sheet: #0E1120;
       --glass-modal: #0E1120;
       --glass-input: #0B0E1A;
-      --glass-border: rgba(239, 234, 224, 0.14);
-      --glass-border-strong: rgba(239, 234, 224, 0.32);
-      --glass-stroke: rgba(239, 234, 224, 0.08);
+      --glass-border: rgba(var(--edge), 0.14);
+      --glass-border-strong: rgba(var(--edge), 0.32);
+      --glass-stroke: rgba(var(--edge), 0.08);
 
       --text-primary: #EFEBDD;
       --text-secondary: #A2A6BD;
       --text-muted: #6E7390;
-      --text-inverse: #16130E;
+      --text-inverse: var(--ink-solid);
 
       --accent: var(--gold);
       --accent-2: var(--gold-2);
       --accent-grad: linear-gradient(96deg, #E8CFA2, #C89A54);
       --accent-ink: #E7C892;
       --accent-text: #D9B36C;
-      --accent-soft: rgba(217, 179, 108, 0.13);
-      --accent-border: rgba(217, 179, 108, 0.42);
-      --on-accent: #16130E;
+      --accent-soft: rgba(var(--gold-rgb), 0.13);
+      --accent-border: rgba(var(--gold-rgb), 0.42);
+      --on-accent: var(--ink-solid);
 
-      --glow-1: rgba(120, 96, 255, 0.22);
-      --glow-2: rgba(217, 179, 108, 0.20);
+      --glow-1: rgba(var(--glow1-rgb), 0.22);
+      --glow-2: rgba(var(--gold-rgb), 0.20);
 
       --dock-bg: rgba(10, 12, 20, 0.92);
-      --dock-line: rgba(239, 234, 224, 0.10);
+      --dock-line: rgba(var(--edge), 0.10);
       --dock-fg: #6E7390;
-      --dock-active-bg: rgba(239, 234, 224, 0.05);
+      --dock-active-bg: rgba(var(--edge), 0.05);
       --dock-active-fg: #EFEBDD;
 
       --overlay: rgba(2, 3, 8, 0.82);
@@ -1731,7 +1731,7 @@
 
     /* ---------- фон сцены: ночь + золотое свечение ---------- */
     .phone-shell::before {
-      background-image: radial-gradient(circle at 1px 1px, rgba(239, 234, 224, 0.045) 1px, transparent 0);
+      background-image: radial-gradient(circle at 1px 1px, rgba(var(--edge), 0.045) 1px, transparent 0);
       background-size: 22px 22px;
     }
     .bg-scene::before {
@@ -1742,7 +1742,7 @@
     .bg-scene::after {
       content: ''; position: absolute; left: -20%; top: 10%;
       width: 320px; height: 320px; border-radius: 50%;
-      background: radial-gradient(circle at 40% 40%, rgba(216, 181, 108, 0.16), rgba(216, 181, 108, 0) 66%);
+      background: radial-gradient(circle at 40% 40%, rgba(var(--gold-rgb), 0.16), rgba(var(--gold-rgb), 0) 66%);
       filter: blur(30px);
       transform: translate3d(0, 0, 0);
       animation: ambient-drift 30s var(--ease-smooth) infinite alternate;
@@ -1763,7 +1763,7 @@
     .modal-sheet { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 
     .btn { border-radius: 14px; font-family: var(--font-num); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
-    .btn-accent { background: var(--accent-grad); border: 0; color: var(--on-accent); box-shadow: 0 14px 34px -14px rgba(217, 179, 108, 0.75); }
+    .btn-accent { background: var(--accent-grad); border: 0; color: var(--on-accent); box-shadow: 0 14px 34px -14px rgba(var(--gold-rgb), 0.75); }
     .btn-accent:active { transform: translateY(1px); }
     .btn-pill { height: 34px; padding: 0 12px; border-radius: 12px; font-size: 10px; }
     .btn-large { border-radius: 16px; }
@@ -1777,16 +1777,16 @@
     /* ---------- МАСТХЕД ---------- */
     .deck-top {
       height: 56px; padding: 0 16px; border-bottom: 1px solid var(--glass-stroke);
-      background: linear-gradient(180deg, rgba(217, 179, 108, 0.05), transparent 80%); background-color: var(--bg-app);
+      background: linear-gradient(180deg, rgba(var(--gold-rgb), 0.05), transparent 80%); background-color: var(--bg-app);
     }
     .mast-mark {
       width: 30px; height: 30px; min-width: 30px; border-radius: 50%;
       background: radial-gradient(circle at 34% 30%, #F4E3C2, #B8893F 62%, #7A5318);
-      color: #16130E; border: 1px solid rgba(240, 217, 172, 0.5);
+      color: var(--ink-solid); border: 1px solid rgba(240, 217, 172, 0.5);
       display: grid; place-items: center;
       font-family: var(--font-num); font-size: 8.5px; font-weight: 700;
       letter-spacing: 0.04em; transform: none;
-      box-shadow: 0 6px 18px -6px rgba(217, 179, 108, 0.55), inset 0 1px 2px rgba(255,255,255,0.5);
+      box-shadow: 0 6px 18px -6px rgba(var(--gold-rgb), 0.55), inset 0 1px 2px rgba(255,255,255,0.5);
     }
     .deck-brand-name { font-family: var(--font-display); font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
     .deck-brand-sub { margin-top: 3px; font-size: 7.5px; letter-spacing: 0.16em; }
@@ -1823,9 +1823,9 @@
       display: flex; flex-direction: column;
       padding: 18px 20px 14px;
       overflow: hidden;
-      background: linear-gradient(168deg, #12141F 0%, #0A0B12 66%);
+      background: linear-gradient(168deg, var(--cover-a) 0%, var(--cover-b) 66%);
       color: var(--text-primary);
-      border: 1px solid rgba(239, 234, 224, 0.10);
+      border: 1px solid rgba(var(--edge), 0.10);
       border-radius: 14px;
       box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.05);
       scroll-snap-align: start; scroll-snap-stop: always;
@@ -1835,16 +1835,16 @@
     /* затемнение соседних обложек (scroll-linked) */
     .deck-card::after {
       content: ''; position: absolute; inset: 0; z-index: 5; pointer-events: none;
-      background: #03040A; opacity: var(--dim);
+      background: var(--bg-fade); opacity: var(--dim);
     }
     /* редкие «слоновые» выпуски */
     .deck-card.is-pearl {
-      background: linear-gradient(168deg, #F6F2E8 0%, #E7E0CF 70%);
-      color: #16130E;
-      border-color: rgba(22, 19, 14, 0.12);
+      background: linear-gradient(168deg, var(--pearl-a) 0%, var(--pearl-b) 70%);
+      color: var(--ink-solid);
+      border-color: rgba(var(--ink), 0.12);
       box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 1), inset 0 1px 0 rgba(255, 255, 255, 0.75);
     }
-    .deck-card.is-pearl::after { background: #0D0924; }
+    .deck-card.is-pearl::after { background: var(--bg-fade); }
 
     /* паспарту-рамка + угловые метки */
     .cv-frame {
@@ -1861,25 +1861,25 @@
       position: absolute; z-index: 0; right: -34px; top: 19%;
       width: clamp(210px, 62vw, 300px); height: clamp(210px, 62vw, 300px);
       pointer-events: none;
-      --obj-a: #8F7BFF; --obj-b: #2A2670; --obj-c: rgba(239, 234, 224, 0.95);
+      --obj-a: var(--orb-a); --obj-b: var(--orb-b); --obj-c: rgba(var(--edge), 0.95);
     }
-    .deck-card.is-pearl .cv-object { --obj-a: #EFD9A8; --obj-b: #8A5F1E; --obj-c: rgba(255, 250, 240, 0.95); right: -48px; }
+    .deck-card.is-pearl .cv-object { --obj-a: #EFD9A8; --obj-b: var(--pearl-ink); --obj-c: rgba(255, 250, 240, 0.95); right: -48px; }
     .cv-glow {
       position: absolute; inset: -26%;
-      background: radial-gradient(circle, rgba(143, 123, 255, 0.30) 0%, transparent 62%);
+      background: radial-gradient(circle, var(--orb-glow) 0%, transparent 62%);
       transform: translate3d(0, 0, 0);
       animation: halo-breathe 7s var(--ease-smooth) infinite alternate;
     }
-    .deck-card.is-pearl .cv-glow { background: radial-gradient(circle, rgba(217, 179, 108, 0.30) 0%, transparent 62%); }
+    .deck-card.is-pearl .cv-glow { background: radial-gradient(circle, rgba(var(--gold-rgb), 0.30) 0%, transparent 62%); }
     @keyframes halo-breathe { from { opacity: 0.7; transform: scale(0.94); } to { opacity: 1; transform: scale(1.05); } }
     .cv-ring {
       position: absolute; inset: -12%;
       border-radius: 50%;
-      border: 1px solid rgba(239, 234, 224, 0.20);
+      border: 1px solid rgba(var(--edge), 0.20);
       transform: rotate3d(1, -0.35, 0, 62deg);
     }
-    .deck-card.is-pearl .cv-ring { border-color: rgba(22, 19, 14, 0.25); }
-    .cv-ring.r2 { inset: -26%; border-color: rgba(239, 234, 224, 0.10); animation: ring-slow 26s linear infinite; }
+    .deck-card.is-pearl .cv-ring { border-color: rgba(var(--ink), 0.25); }
+    .cv-ring.r2 { inset: -26%; border-color: rgba(var(--edge), 0.10); animation: ring-slow 26s linear infinite; }
     @keyframes ring-slow { from { transform: rotate3d(1, -0.35, 0, 62deg) rotate(0deg); } to { transform: rotate3d(1, -0.35, 0, 62deg) rotate(360deg); } }
     .cv-sphere {
       position: absolute; inset: 12%;
@@ -1929,14 +1929,14 @@
       margin-left: auto; width: 32px; height: 32px; flex: none;
       display: grid; place-items: center;
       background: rgba(8, 8, 14, 0.4);
-      border: 1px solid rgba(239, 234, 224, 0.28);
+      border: 1px solid rgba(var(--edge), 0.28);
       border-radius: 50%;
       color: inherit; opacity: 0.55;
       transition: opacity 0.2s, transform 0.25s var(--ease-spring), color 0.2s;
     }
-    .deck-card.is-pearl .cv-save { background: rgba(255, 255, 255, 0.4); border-color: rgba(22, 19, 14, 0.3); }
+    .deck-card.is-pearl .cv-save { background: rgba(255, 255, 255, 0.4); border-color: rgba(var(--ink), 0.3); }
     .cv-save.is-saved { opacity: 1; color: var(--accent-ink); border-color: var(--accent-border); }
-    .deck-card.is-pearl .cv-save.is-saved { color: #8A5F1E; border-color: rgba(22, 19, 14, 0.4); }
+    .deck-card.is-pearl .cv-save.is-saved { color: var(--pearl-ink); border-color: rgba(var(--ink), 0.4); }
     .cv-save.is-saved svg { fill: currentColor; }
     .cv-save:active { transform: scale(0.9); }
 
@@ -1946,7 +1946,7 @@
       font-family: var(--font-num); font-size: 7.5px; letter-spacing: 0.2em;
       text-transform: uppercase; color: var(--accent-ink);
     }
-    .deck-card.is-pearl .cv-kicker { color: #8A5F1E; }
+    .deck-card.is-pearl .cv-kicker { color: var(--pearl-ink); }
     .cv-kicker::before { content: ''; width: 26px; height: 1px; background: currentColor; }
 
     .cv-title {
@@ -1972,7 +1972,7 @@
       background: linear-gradient(90deg, var(--gold) 0%, transparent 85%);
       opacity: 0.55;
     }
-    .deck-card.is-pearl .cv-price::before { background: linear-gradient(90deg, rgba(22, 19, 14, 0.5), transparent 85%); }
+    .deck-card.is-pearl .cv-price::before { background: linear-gradient(90deg, rgba(var(--ink), 0.5), transparent 85%); }
     .cv-plabel {
       display: inline-block;
       font-family: var(--font-num); font-size: 7.5px; letter-spacing: 0.2em;
@@ -1982,25 +1982,25 @@
     .cv-value {
       font-family: var(--font-display); font-weight: 700;
       font-size: clamp(38px, 12.4vw, 54px); line-height: 0.98;
-      letter-spacing: -0.02em; color: #FFFFFF;
+      letter-spacing: -0.02em; color: var(--cover-contrast);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
-      text-shadow: 0 4px 34px rgba(216, 181, 108, 0.30);
+      text-shadow: 0 4px 34px rgba(var(--gold-rgb), 0.30);
     }
     .cv-value i {
       display: inline-block; margin-left: 8px;
       font-style: normal; font-size: 0.42em; font-weight: 500; opacity: 0.6;
       transform: translateY(-0.18em);
     }
-    .deck-card.is-pearl .cv-value { color: #16130E; }
+    .deck-card.is-pearl .cv-value { color: var(--ink-solid); }
     .cv-disc {
       flex: none; margin-bottom: 8px;
       font-family: var(--font-editor); font-style: italic; font-weight: 600;
       font-size: clamp(26px, 7.6vw, 34px); line-height: 1;
       color: var(--gold-2);
-      text-shadow: 0 4px 26px rgba(217, 179, 108, 0.5);
+      text-shadow: 0 4px 26px rgba(var(--gold-rgb), 0.5);
     }
-    .deck-card.is-pearl .cv-disc { color: #8A5F1E; text-shadow: none; }
+    .deck-card.is-pearl .cv-disc { color: var(--pearl-ink); text-shadow: none; }
     .cv-market {
       display: block; margin-top: 8px;
       font-family: var(--font-num); font-size: 9px; letter-spacing: 0.1em;
@@ -2027,13 +2027,13 @@
     .cv-btn:active { transform: scale(0.97); }
     .cv-btn.solid {
       background: var(--accent-grad); border: 1px solid rgba(255, 250, 240, 0.5); color: var(--on-accent);
-      box-shadow: 0 18px 40px -14px rgba(217, 179, 108, 0.75), inset 0 1px 1px rgba(255, 255, 255, 0.6);
+      box-shadow: 0 18px 40px -14px rgba(var(--gold-rgb), 0.75), inset 0 1px 1px rgba(255, 255, 255, 0.6);
     }
     .cv-btn.solid span { font-size: 13px; line-height: 1; }
     .cv-btn.ghost {
-      background: rgba(8, 8, 14, 0.35); border: 1px solid rgba(239, 234, 224, 0.30); color: var(--text-secondary);
+      background: rgba(8, 8, 14, 0.35); border: 1px solid rgba(var(--edge), 0.30); color: var(--text-secondary);
     }
-    .deck-card.is-pearl .cv-btn.ghost { background: rgba(255, 255, 255, 0.35); border-color: rgba(22, 19, 14, 0.28); color: #16130E; }
+    .deck-card.is-pearl .cv-btn.ghost { background: rgba(255, 255, 255, 0.35); border-color: rgba(var(--ink), 0.28); color: var(--ink-solid); }
 
     .cv-foot {
       margin-top: 12px;
@@ -2047,7 +2047,7 @@
     /* ---------- ПРОГРЕСС ВЫПУСКОВ ---------- */
     .deck-meter { height: 34px; padding: 0 18px; border: 0; background: transparent; gap: 10px; }
     .deck-count { font-family: var(--font-num); font-size: 8.5px; font-weight: 700; letter-spacing: 0.16em; color: var(--accent-ink); }
-    .deck-track { height: 1px; border-radius: 0; background: rgba(239, 234, 224, 0.14); }
+    .deck-track { height: 1px; border-radius: 0; background: rgba(var(--edge), 0.14); }
     .deck-track i { background: var(--accent-grad); border-radius: 0; }
     .deck-hint { font-family: var(--font-num); font-size: 7.5px; letter-spacing: 0.16em; color: var(--text-muted); }
 
@@ -2101,22 +2101,22 @@
     .filters-opt { height: 38px; border-radius: 12px; padding: 0 13px; font-size: 8.5px; letter-spacing: 0.06em; }
     .filters-opt.active {
       background: var(--accent-grad); border-color: rgba(255, 250, 240, 0.4); color: var(--on-accent); font-weight: 700;
-      box-shadow: 0 12px 26px -12px rgba(217, 179, 108, 0.75);
+      box-shadow: 0 12px 26px -12px rgba(var(--gold-rgb), 0.75);
     }
     .filters-row { margin-top: 14px; }
     .filters-apply {
       border-radius: 999px; height: 54px; margin-top: 14px;
       background: var(--accent-grad); border: 1px solid rgba(255, 250, 240, 0.5); color: var(--on-accent);
       font-size: 9.5px; font-weight: 700;
-      box-shadow: 0 18px 40px -14px rgba(217, 179, 108, 0.75), inset 0 1px 1px rgba(255, 255, 255, 0.6);
+      box-shadow: 0 18px 40px -14px rgba(var(--gold-rgb), 0.75), inset 0 1px 1px rgba(255, 255, 255, 0.6);
     }
 
     /* ---------- ЗАСТАВКА ---------- */
     .intro { background: var(--bg-app); }
     .intro::before {
       background:
-        radial-gradient(76% 44% at 74% -4%, rgba(120, 96, 255, 0.26), transparent 64%),
-        radial-gradient(56% 38% at -8% 82%, rgba(217, 179, 108, 0.2), transparent 70%);
+        radial-gradient(76% 44% at 74% -4%, rgba(var(--glow1-rgb), 0.26), transparent 64%),
+        radial-gradient(56% 38% at -8% 82%, rgba(var(--gold-rgb), 0.2), transparent 70%);
     }
     .intro-badge-text, .intro-chip { font-family: var(--font-num); }
     .intro-chip { border-radius: 999px; background: var(--accent-grad); color: var(--on-accent); border: 0; font-weight: 700; }
@@ -2134,7 +2134,7 @@
       color: var(--gold-2);
     }
     .intro-sub { font-family: var(--font-num); font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-secondary); line-height: 1.7; }
-    .intro-progress { height: 1px; border-radius: 0; background: rgba(239, 234, 224, 0.10); }
+    .intro-progress { height: 1px; border-radius: 0; background: rgba(var(--edge), 0.10); }
     .intro-progress-fill { background: var(--accent-grad); }
 
     /* ---------- ПРОЧИЕ ЭКРАНЫ ---------- */
@@ -2149,23 +2149,23 @@
     .city-select, .sort-btn { border-radius: 999px; }
     .input-glass { border-radius: 14px; }
     .timer-badge { border-radius: 999px; font-size: 8px; background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-border); }
-    .theme-option.is-active { border-color: var(--accent-border); box-shadow: 0 10px 26px -12px rgba(217, 179, 108, 0.7); }
+    .theme-option.is-active { border-color: var(--accent-border); box-shadow: 0 10px 26px -12px rgba(var(--gold-rgb), 0.7); }
 
     /* ---------- ИЗБРАННОЕ: витрина «слоновых» обложек ---------- */
     .lot-card {
       margin: 0 0 12px; padding: 15px 16px 13px;
-      background: linear-gradient(168deg, #F6F2E8 0%, #E9E2D1 72%);
-      color: #16130E;
-      border: 1px solid rgba(22, 19, 14, 0.10); border-top: 1px solid rgba(22, 19, 14, 0.10);
+      background: linear-gradient(168deg, var(--pearl-a) 0%, var(--pearl-b) 72%);
+      color: var(--ink-solid);
+      border: 1px solid rgba(var(--ink), 0.10); border-top: 1px solid rgba(var(--ink), 0.10);
       border-radius: 16px;
       box-shadow: var(--shadow-card);
       content-visibility: visible; contain-intrinsic-size: auto;
     }
-    .lot-card:last-of-type { border-bottom: 1px solid rgba(22, 19, 14, 0.10); }
+    .lot-card:last-of-type { border-bottom: 1px solid rgba(var(--ink), 0.10); }
     .lot-card.is-hot { box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(138, 95, 30, 0.4); padding-left: 16px; margin-left: 0; }
     .lot-card.is-viewed { opacity: 0.88; }
-    .lot-meta { color: rgba(22, 19, 14, 0.55); }
-    .src-badge { border-radius: 999px; border: 1px solid rgba(22, 19, 14, 0.3); }
+    .lot-meta { color: rgba(var(--ink), 0.55); }
+    .src-badge { border-radius: 999px; border: 1px solid rgba(var(--ink), 0.3); }
     .lot-title {
       font-family: var(--font-display); font-size: 16px; font-weight: 700;
       line-height: 1.14; letter-spacing: -0.01em; text-transform: none;
@@ -2173,28 +2173,28 @@
     }
     .lot-price {
       font-family: var(--font-display); font-size: 28px; font-weight: 700;
-      letter-spacing: -0.02em; line-height: 1; color: #16130E;
+      letter-spacing: -0.02em; line-height: 1; color: var(--ink-solid);
     }
     .lot-sticker {
-      border-radius: 999px; background: linear-gradient(96deg, #E8CFA2, #C89A54); color: #16130E;
+      border-radius: 999px; background: linear-gradient(96deg, #E8CFA2, #C89A54); color: var(--ink-solid);
       font-family: var(--font-num); font-size: 9px; font-weight: 700; padding: 4px 9px;
-      box-shadow: 0 10px 24px -10px rgba(217, 179, 108, 0.8);
+      box-shadow: 0 10px 24px -10px rgba(var(--gold-rgb), 0.8);
     }
     .lot-sticker.is-hot { background: linear-gradient(96deg, #E8CFA2, #C89A54); }
-    .lot-sticker.is-flat { background: rgba(22, 19, 14, 0.1); color: rgba(22, 19, 14, 0.7); box-shadow: none; }
-    .lot-save-amount { color: #8A5F1E; font-size: 8px; }
+    .lot-sticker.is-flat { background: rgba(var(--ink), 0.1); color: rgba(var(--ink), 0.7); box-shadow: none; }
+    .lot-save-amount { color: var(--pearl-ink); font-size: 8px; }
     .lot-save { width: 34px; height: 34px; border-radius: 50%; }
-    .lot-save.is-saved { color: #8A5F1E; }
+    .lot-save.is-saved { color: var(--pearl-ink); }
     .lot-save.is-saved svg { fill: currentColor; }
     .lot-claim {
       height: 34px !important; padding: 0 14px !important; border-radius: 999px !important;
-      background: linear-gradient(96deg, #E8CFA2, #C89A54); border: 1px solid rgba(255, 250, 240, 0.55); color: #16130E;
+      background: linear-gradient(96deg, #E8CFA2, #C89A54); border: 1px solid rgba(255, 250, 240, 0.55); color: var(--ink-solid);
       font-size: 8.5px; font-weight: 700;
-      box-shadow: 0 12px 28px -12px rgba(217, 179, 108, 0.8);
+      box-shadow: 0 12px 28px -12px rgba(var(--gold-rgb), 0.8);
     }
-    .lot-foot { border-top: 1px solid rgba(22, 19, 14, 0.12); margin-top: 12px; padding-top: 10px; }
-    .lot-seller { font-family: var(--font-num); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(22, 19, 14, 0.65); }
-    .lot-viewed { border-radius: 999px; color: rgba(22, 19, 14, 0.6); }
+    .lot-foot { border-top: 1px solid rgba(var(--ink), 0.12); margin-top: 12px; padding-top: 10px; }
+    .lot-seller { font-family: var(--font-num); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(var(--ink), 0.65); }
+    .lot-viewed { border-radius: 999px; color: rgba(var(--ink), 0.6); }
     .empty-card { border-radius: 16px !important; border: 1px solid var(--glass-stroke); background: var(--surface-1) !important; color: var(--text-primary); box-shadow: var(--shadow-card); }
 
     /* ---------- мелочи ---------- */
@@ -2213,6 +2213,290 @@
       .deck-card { padding-left: 16px; padding-right: 16px; }
       .deck-brand-name { font-size: 11px; }
     }
+
+  
+    /* ============================================================
+       V7 — «Лето / Осень / Зима»: сезонные темы, живая природа,
+       сезонный дождь при смене вкладок, шрифт Inter вместо моно.
+       Только transform/opacity — все анимации на композиторе.
+       ============================================================ */
+    :root {
+      --font-num: 'Inter', system-ui, sans-serif;
+
+      --edge: 239, 234, 224;
+      --ink: 22, 19, 14;
+      --ink-solid: #16130E;
+      --pearl-ink: #8A5F1E;
+      --cover-a: #12141F;
+      --cover-b: #0A0B12;
+      --pearl-a: #F6F2E8;
+      --pearl-b: #E7E0CF;
+      --cover-contrast: #FFFFFF;
+      --orb-a: #8F7BFF;
+      --orb-b: #2A2670;
+      --orb-glow: rgba(143, 123, 255, 0.30);
+      --ambient-c: rgba(216, 181, 108, 0.14);
+      --bg-fade: #03040A;
+      --gold-rgb: 217, 179, 108;
+      --glow1-rgb: 120, 96, 255;
+    }
+
+    /* ---------- значения тем ---------- */
+    [data-theme='summer'] {
+      --bg-canvas: #E9EFDA;
+      --bg-app: #F3F6E8;
+      --bg-deep: #E2EACF;
+      --surface-1: #FDFEF8;
+      --surface-2: #F6F8EC;
+      --surface-3: #EDF1DB;
+
+      --gold: #5E8A2E;
+      --gold-2: #7FA84A;
+      --gold-rgb: 94, 138, 46;
+      --glow1-rgb: 154, 182, 84;
+
+      --glass-card: #FBFCEF;
+      --glass-dock: rgba(248, 250, 238, 0.92);
+      --glass-sheet: #F8FAEF;
+      --glass-modal: #F8FAEF;
+      --glass-input: #FFFFFF;
+
+      --text-primary: #26331C;
+      --text-secondary: #54644A;
+      --text-muted: #77856B;
+      --text-inverse: #FFFFFF;
+
+      --accent: #5E8A2E;
+      --accent-2: #8DB35A;
+      --accent-grad: linear-gradient(96deg, #A9C46A, #638C2E);
+      --accent-ink: #4F7B24;
+      --accent-text: #4F7B24;
+      --accent-soft: rgba(94, 138, 46, 0.13);
+      --accent-border: rgba(94, 138, 46, 0.40);
+      --on-accent: #FFFFFF;
+
+      --glow-1: rgba(154, 182, 84, 0.22);
+      --glow-2: rgba(218, 232, 168, 0.28);
+
+      --dock-bg: rgba(249, 251, 240, 0.94);
+      --dock-line: rgba(66, 88, 40, 0.12);
+      --dock-fg: #77856B;
+      --dock-active-bg: rgba(94, 138, 46, 0.08);
+      --dock-active-fg: #26331C;
+
+      --overlay: rgba(28, 36, 16, 0.55);
+      --shadow-dock: 0 22px 46px -20px rgba(38, 51, 28, 0.55);
+      --shadow-modal: 0 -30px 70px -30px rgba(38, 51, 28, 0.5);
+      --shadow-card: 0 26px 54px -28px rgba(38, 51, 28, 0.5);
+      --green: #4F7B24;
+
+      --cover-a: #F1F4E2;
+      --cover-b: #DEE5C6;
+      --pearl-a: #FFFFFF;
+      --pearl-b: #EAE5C3;
+      --cover-contrast: #26331C;
+      --orb-a: #AECB77;
+      --orb-b: #567A2B;
+      --orb-glow: rgba(142, 178, 74, 0.30);
+      --ambient-c: rgba(126, 160, 62, 0.16);
+      --bg-fade: #E9EFDA;
+      --pearl-ink: #72681B;
+      --ink: 60, 78, 34;
+      --ink-solid: #26331C;
+    }
+    [data-theme='autumn'] {
+      --bg-canvas: #130B05;
+      --bg-app: #1A120A;
+      --bg-deep: #0F0904;
+      --surface-1: #241710;
+      --surface-2: #2B1C12;
+      --surface-3: #352315;
+
+      --gold: #E2A15C;
+      --gold-2: #F0C48C;
+      --gold-rgb: 226, 161, 92;
+      --glow1-rgb: 255, 130, 50;
+
+      --glass-card: #241710;
+      --glass-dock: rgba(22, 14, 8, 0.92);
+      --glass-sheet: #201509;
+      --glass-modal: #201509;
+      --glass-input: #1D1307;
+
+      --text-primary: #F5EADC;
+      --text-secondary: #C0B0A0;
+      --text-muted: #8B7D6F;
+      --text-inverse: #241505;
+
+      --accent: #E2A15C;
+      --accent-2: #F0C48C;
+      --accent-grad: linear-gradient(96deg, #F0C48C, #C98443);
+      --accent-ink: #E2A15C;
+      --accent-text: #E2A15C;
+      --accent-soft: rgba(226, 161, 92, 0.13);
+      --accent-border: rgba(226, 161, 92, 0.42);
+      --on-accent: #241505;
+
+      --glow-1: rgba(255, 130, 50, 0.20);
+      --glow-2: rgba(226, 161, 92, 0.20);
+
+      --dock-bg: rgba(20, 12, 6, 0.92);
+      --dock-line: rgba(242, 222, 196, 0.10);
+      --dock-fg: #8B7D6F;
+      --dock-active-bg: rgba(242, 222, 196, 0.05);
+      --dock-active-fg: #F5EADC;
+
+      --overlay: rgba(10, 6, 2, 0.82);
+      --shadow-dock: 0 22px 46px -18px rgba(4, 2, 0, 0.9);
+      --shadow-modal: 0 -30px 70px -30px rgba(4, 2, 0, 0.92);
+      --shadow-card: 0 34px 70px -34px rgba(4, 2, 0, 0.9);
+      --green: #E0A45F;
+
+      --cover-a: #241508;
+      --cover-b: #140C05;
+      --pearl-a: #F8F1E4;
+      --pearl-b: #EADFC8;
+      --cover-contrast: #FFF6EA;
+      --orb-a: #FF9A3D;
+      --orb-b: #7A3E12;
+      --orb-glow: rgba(255, 154, 61, 0.28);
+      --ambient-c: rgba(226, 161, 92, 0.16);
+      --bg-fade: #0C0703;
+      --pearl-ink: #B06A22;
+      --ink: 242, 222, 196;
+      --ink-solid: #241505;
+    }
+    [data-theme='winter'] {
+      --bg-canvas: #081020;
+      --bg-app: #0E1526;
+      --bg-deep: #060C18;
+      --surface-1: #141E32;
+      --surface-2: #18233A;
+      --surface-3: #1E2A44;
+
+      --gold: #8CC1E8;
+      --gold-2: #BFE0F5;
+      --gold-rgb: 155, 200, 235;
+      --glow1-rgb: 90, 160, 230;
+
+      --glass-card: #141E32;
+      --glass-dock: rgba(10, 16, 30, 0.92);
+      --glass-sheet: #101A2E;
+      --glass-modal: #101A2E;
+      --glass-input: #0E1728;
+
+      --text-primary: #E8F1F9;
+      --text-secondary: #A6B8CC;
+      --text-muted: #7288A2;
+      --text-inverse: #0C1626;
+
+      --accent: #8CC1E8;
+      --accent-2: #BFE0F5;
+      --accent-grad: linear-gradient(96deg, #B4DCF4, #6398C9);
+      --accent-ink: #A9D0EC;
+      --accent-text: #A9D0EC;
+      --accent-soft: rgba(140, 193, 232, 0.13);
+      --accent-border: rgba(140, 193, 232, 0.40);
+      --on-accent: #0C1626;
+
+      --glow-1: rgba(90, 160, 230, 0.20);
+      --glow-2: rgba(120, 180, 240, 0.16);
+
+      --dock-bg: rgba(10, 16, 30, 0.92);
+      --dock-line: rgba(224, 240, 250, 0.10);
+      --dock-fg: #7288A2;
+      --dock-active-bg: rgba(224, 240, 250, 0.05);
+      --dock-active-fg: #E8F1F9;
+
+      --overlay: rgba(4, 8, 16, 0.82);
+      --shadow-dock: 0 22px 46px -18px rgba(2, 4, 8, 0.9);
+      --shadow-modal: 0 -30px 70px -30px rgba(2, 4, 8, 0.92);
+      --shadow-card: 0 34px 70px -34px rgba(2, 4, 8, 0.9);
+      --green: #8CC1E8;
+
+      --cover-a: #16223A;
+      --cover-b: #0B1424;
+      --pearl-a: #F2F7FB;
+      --pearl-b: #DEE9F2;
+      --cover-contrast: #FFFFFF;
+      --orb-a: #9FD0F2;
+      --orb-b: #2B4C72;
+      --orb-glow: rgba(159, 208, 242, 0.30);
+      --ambient-c: rgba(156, 199, 232, 0.14);
+      --bg-fade: #060B14;
+      --pearl-ink: #4E7CA6;
+      --ink: 224, 240, 250;
+      --ink-solid: #0C1626;
+    }
+
+    /* «Живые» цифры — JetBrains Mono только там, где это музейная подпись */
+    .cv-issue, .deck-count, .mast-mark {
+      font-family: 'JetBrains Mono', var(--font-num), monospace;
+    }
+
+    /* светлые «слоновые» поверхности всегда пишут тёмными чернилами */
+    .lot-card, .deck-card.is-pearl {
+      --ink: 22, 19, 14;
+    }
+
+    /* ---------- фон-природа ---------- */
+    #bg-nature {
+      position: absolute; inset: 0; overflow: hidden;
+      pointer-events: none; z-index: 0;
+    }
+    #bg-nature i {
+      position: absolute; top: -6vh;
+      display: block; opacity: 0;
+      animation: var(--na, snow-fall) var(--nd, 18s) linear var(--np, 0s) infinite;
+      will-change: transform, opacity;
+    }
+    html[data-theme='summer'] #bg-nature { --na: pollen-rise; }
+    html[data-theme='summer'] #bg-nature i {
+      top: auto; bottom: -6vh; width: 9px; height: 9px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(214, 226, 130, 0.7) 0%, transparent 68%);
+    }
+    html[data-theme='autumn'] #bg-nature { --na: leaf-fall; }
+    html[data-theme='autumn'] #bg-nature i {
+      width: 13px; height: 13px;
+      border-radius: 14% 0 14% 0;
+      background: linear-gradient(135deg, #D98B3E, #9E5318);
+    }
+    html[data-theme='winter'] #bg-nature { --na: snow-fall; }
+    html[data-theme='winter'] #bg-nature i {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0.2) 95%);
+    }
+    html.low-perf #bg-nature i, html[data-theme='summer'] #bg-nature i:nth-child(n+9) { display: none; }
+
+    @keyframes leaf-fall {
+      0% { opacity: 0; transform: translate3d(0, -6vh, 0) rotate(0deg); }
+      8% { opacity: 0.5; }
+      92% { opacity: 0.32; }
+      100% { opacity: 0; transform: translate3d(5vw, 105vh, 0) rotate(300deg); }
+    }
+    @keyframes snow-fall {
+      0% { opacity: 0; transform: translate3d(0, -6vh, 0); }
+      10% { opacity: 0.55; }
+      90% { opacity: 0.28; }
+      100% { opacity: 0; transform: translate3d(-3vw, 105vh, 0); }
+    }
+    @keyframes pollen-rise {
+      0% { opacity: 0; transform: translate3d(0, 4vh, 0) scale(1); }
+      12% { opacity: 0.4; }
+      88% { opacity: 0.22; }
+      100% { opacity: 0; transform: translate3d(4vw, -104vh, 0) scale(1.3); }
+    }
+
+    /* ---------- сезонный дождь при смене вкладок ---------- */
+    #season-rain {
+      position: fixed; inset: 0; overflow: hidden;
+      pointer-events: none; z-index: 600;
+    }
+    #season-rain i { position: absolute; top: -34px; display: block; opacity: 0; border-radius: 50%; }
+    #season-rain i.leaf { border-radius: 14% 0 14% 0; background: linear-gradient(135deg, #D98B3E, #9E5318); }
+    #season-rain i.snow { background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.35) 100%); }
+    #season-rain i.petal { background: radial-gradient(circle at 35% 30%, #F0EAC8, #B8D27C); border-radius: 60% 40% 55% 45%; }
+
 
   </style>
 </head>
@@ -2238,7 +2522,24 @@
     </div>
     <div class="bg-scene" aria-hidden="true">
       <span class="bg-grain"></span>
+      <div id="bg-nature">
+        <i style="left:3%; --nd:19s; --np:-2s;"></i>
+        <i style="left:9%; --nd:24s; --np:-11s;"></i>
+        <i style="left:16%; --nd:16s; --np:-6s;"></i>
+        <i style="left:24%; --nd:21s; --np:-14s;"></i>
+        <i style="left:32%; --nd:26s; --np:-9s;"></i>
+        <i style="left:39%; --nd:17s; --np:-1s;"></i>
+        <i style="left:47%; --nd:22s; --np:-18s;"></i>
+        <i style="left:54%; --nd:15s; --np:-7s;"></i>
+        <i style="left:62%; --nd:20s; --np:-12s;"></i>
+        <i style="left:70%; --nd:25s; --np:-4s;"></i>
+        <i style="left:77%; --nd:18s; --np:-15s;"></i>
+        <i style="left:84%; --nd:23s; --np:-8s;"></i>
+        <i style="left:90%; --nd:16s; --np:-3s;"></i>
+        <i style="left:96%; --nd:21s; --np:-10s;"></i>
+      </div>
     </div>
+    <div id="season-rain" aria-hidden="true"></div>
     <div id="toast-box"></div>
     <div id="app"></div>
   </div>
@@ -2326,12 +2627,12 @@
       return `<div style="width:${size}px; height:${size}px; border-radius:${Math.round(size*0.32)}px; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:var(--on-accent); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:${fontSize}px;">${initials}</div>`;
     }
 
-    const THEME_IDS = ['dark'];
-    let savedTheme = 'dark';
+    const THEME_IDS = ['summer', 'autumn', 'winter'];
+    let savedTheme = 'summer';
     try {
       let raw = localStorage.getItem('dh_theme');
-      if (raw === 'olive') raw = 'paper';
-      savedTheme = THEME_IDS.includes(raw) ? raw : 'dark';
+      if (raw === 'dark' || raw === 'olive' || raw === 'paper') raw = 'summer';
+      savedTheme = THEME_IDS.includes(raw) ? raw : 'summer';
       if (raw && raw !== savedTheme) localStorage.setItem('dh_theme', savedTheme);
     } catch (e) {}
     document.documentElement.setAttribute('data-theme', savedTheme);
@@ -2342,7 +2643,7 @@
     } catch (e) {}
     (function syncThemeMeta() {
       const meta = document.getElementById('meta-theme');
-      if (meta) meta.setAttribute('content', savedTheme === 'dark' ? '#07080F' : '#07080F');
+      if (meta) meta.setAttribute('content', ({ summer: '#F3F6E8', autumn: '#1A120A', winter: '#0E1526' })[savedTheme] || '#F3F6E8');
     })();
 
         const SELLER_CHECK = {
@@ -2533,11 +2834,13 @@ function lotCategory(title, desc) {
     }, 1000);
 
     const THEMES = [
-      { id: 'dark',  name: 'Неон',   accent: '#8B7CFF', bg: '#0A0C17' },
+      { id: 'summer', name: 'Лето',  accent: '#5E8A2E', bg: '#F3F6E8' },
+      { id: 'autumn', name: 'Осень', accent: '#E2A15C', bg: '#1A120A' },
+      { id: 'winter', name: 'Зима',  accent: '#8CC1E8', bg: '#0E1526' },
     ];
 
     function applyTheme(id) {
-      if (!THEMES.some(t => t.id === id)) id = 'dark';
+      if (!THEMES.some(t => t.id === id)) id = 'summer';
       const theme = THEMES.find(t => t.id === id);
       state.theme = id;
       document.documentElement.setAttribute('data-theme', id);
@@ -2552,8 +2855,49 @@ function lotCategory(title, desc) {
 
     function setThemeAction(id) {
       applyTheme(id);
+      playTabRain();
       showToast('Тема: ' + (THEMES.find(t => t.id === id) || {}).name);
       render();
+    }
+
+    /* Сезонный дождь: короткий оверлей из листьев/снега/лепестков
+       при смене вкладки или темы. Частицы — чистые WAAPI-анимации
+       только с transform/opacity, после пролёта удаляются из DOM. */
+    function playTabRain() {
+      const box = document.getElementById('season-rain');
+      if (!box) return;
+      let reduced = false;
+      try { reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+      if (reduced || box.childElementCount > 24) return;
+      const kind = state.theme === 'summer' ? 'petal' : (state.theme === 'winter' ? 'snow' : 'leaf');
+      const H = window.innerHeight || 800;
+      for (let k = 0; k < 12; k++) {
+        const i = document.createElement('i');
+        i.className = kind;
+        const size = kind === 'snow' ? 5 + Math.random() * 4 : 8 + Math.random() * 6;
+        i.style.left = (4 + Math.random() * 92) + '%';
+        i.style.width = size.toFixed(1) + 'px';
+        i.style.height = size.toFixed(1) + 'px';
+        box.appendChild(i);
+        const drift = Math.random() * 76 - 38;
+        const spin = kind === 'snow' ? 0 : (Math.random() * 460 - 230);
+        try {
+          const anim = i.animate([
+            { opacity: 0, transform: 'translate3d(0, -30px, 0) rotate(0deg)' },
+            { opacity: 0.85, transform: 'translate3d(' + (drift * 0.3).toFixed(0) + 'px, ' + (H * 0.3).toFixed(0) + 'px, 0) rotate(' + (spin * 0.3).toFixed(0) + 'deg)', offset: 0.25 },
+            { opacity: 0.9, transform: 'translate3d(' + drift.toFixed(0) + 'px, ' + (H + 60).toFixed(0) + 'px, 0) rotate(' + spin.toFixed(0) + 'deg)' }
+          ], {
+            duration: kind === 'snow' ? 1250 + Math.random() * 550 : 1050 + Math.random() * 500,
+            delay: k * 55,
+            easing: 'cubic-bezier(0.3, 0.05, 0.65, 1)',
+            fill: 'both'
+          });
+          anim.onfinish = () => { if (i.parentNode) i.parentNode.removeChild(i); };
+          setTimeout(() => { if (i.parentNode) i.parentNode.removeChild(i); }, (kind === 'snow' ? 1850 : 1600) + k * 55 + 120);
+        } catch (e) {
+          if (i.parentNode) i.parentNode.removeChild(i);
+        }
+      }
     }
 
     function openSafeUrl(rawUrl) {
@@ -2829,7 +3173,7 @@ function lotCategory(title, desc) {
       const action = el.getAttribute('data-action');
       const val = el.getAttribute('data-val') || '';
 
-      if (action === 'tab') { state.tab = val; state.detailId = null; state.filtersOpen = false; state.animIn = true; render(); }
+      if (action === 'tab') { state.tab = val; state.detailId = null; state.filtersOpen = false; state.animIn = true; playTabRain(); render(); }
       else if (action === 'theme') {
         const i = THEMES.findIndex(t => t.id === state.theme);
         setThemeAction(THEMES[(i + 1) % THEMES.length].id);
@@ -3830,10 +4174,22 @@ function lotCategory(title, desc) {
         dock.style.animation = 'none';
         try {
           dock.animate([
-            { opacity: 0, transform: 'translate(-50%, 46px) scale(0.92)' },
-            { opacity: 1, transform: 'translate(-50%, 0) scale(1)' }
-          ], { duration: 640, delay: 220, fill: 'backwards', easing: SPRING });
+            { opacity: 0, transform: 'translate3d(0, 30px, 0) scale(0.94)' },
+            { opacity: 1, transform: 'none' }
+          ], { duration: 520, delay: 180, fill: 'backwards', easing: EASE });
         } catch (e) {}
+        /* кнопки разлетаются с боков и собираются друг за дружкой */
+        const btns = Array.prototype.slice.call(shell.querySelectorAll('.dock-btn'));
+        btns.slice(0, low ? 4 : 4).forEach((btn, k) => {
+          const side = k % 2 ? 1 : -1;
+          try {
+            btn.style.animation = 'none';
+            btn.animate([
+              { opacity: 0, transform: 'translate3d(' + (side * 120) + 'px, 64px, 0) scale(0.4) rotate(' + (side * 14) + 'deg)' },
+              { opacity: 1, transform: 'none' }
+            ], { duration: 760, delay: 420 + k * 90, fill: 'backwards', easing: SPRING });
+          } catch (e) {}
+        });
       }
     }
 
