@@ -7,10 +7,17 @@ gifts_scan — «gift sniper» для DealHunter.
   • Portals  (portal-market.com)     — порталовский REST
   • Fragment (fragment.com)          — каталог без кошелька + HTML карточек
 
-Честная «рыночная планка» = МЕДИАНА цен всех текущих листингов модели,
-собранных из трёх маркетов (Tonnel + Portals + Fragment вместе).
-Лот объявляем выгодным, если его цена ≤ (100 - DEAL_PCT)% от медианы
-и выборка по модели достаточно велика (>= MIN_SAMPLES лотов).
+Честная «рыночная планка» модели — приоритет реальным СДЕЛКАМ, а не листингам:
+  1) история продаж Tonnel через /api/giftActivity (SALE/INTERNAL_SALE/AUCTION
+     по предметам; опрашиваем самые дешёвые лоты коллекции) → медиана сделок
+     с IQR-фильтром выбросов (порог MIN_SALES сделок);
+  2) если сделок пока мало — добавляем цены «исчезнувших» лотов (маркировка gone:
+     купили/сняли) и берём min(медиана, медиана ask-листингов);
+  3) если данных всё ещё нет — медиана ask-листингов модели по ВСЕМ трём
+     маркетам (Tonnel + Portals + Fragment), консервативный режим.
+Лот объявляем выгодным, если его цена ≤ (100 - DEAL_PCT)% от планки
+И чистый профит после комиссий ≥ MIN_NET_RUB. Спам-цены «минимального соседа»
+больше не завышают оценку — перекос таких листингов глушится медианой и IQR.
 Ссылки — прямые: Tonnel t.me/tonnel_network_bot/gift?startapp=<id>, Portals Store t.me/portals/market, Fragment /gift/<slug>.
 """
 import os
@@ -57,22 +64,25 @@ TONNEL_LIMIT = 30       # сервер Tonnel не принимает limit > 30
 PORTALS_PAGES = 3
 PORTALS_LIMIT = 30
 
-# Порог «выгодности»: цена ≤ медианы минус DEAL_PCT%
-# 18% — чтобы после комиссий перепродажи (~8%) сделка оставалась в плюсе
+# Порог «выгодности»: цена ≤ планки минус DEAL_PCT%
+# планка = честная рыночная цена (медиана реальных сделок, см. докстринг)
 DEAL_PCT = 12.0
 # Оценка комиссий при перепродаже (доля от цены продажи)
 RESELL_FEE_PCT = 10.0
 # Минимальная чистая прибыль в ₽ после вычета комиссий
 MIN_NET_RUB = 500
 
-# Методика B «перебей соседа»: скидка от живого соседа ≥ 15%
-DEAL_PCT_B = 15.0
-
-# Методика C «строго по продажам»: скидка ≥ 10%, чистыми ≥ 800 ₽
-DEAL_PCT_C = 10.0
-MIN_NET_C = 800
-# Минимальное число листингов в выборке модели, чтобы сравнить с соседом
-MIN_SAMPLES = 2
+# Минимальное число РЕАЛЬНЫХ сделок (Sale-событий), чтобы считать медиану честной
+MIN_SALES = 5
+# Минимальное число ask-листингов модели, чтобы просить медиану листингов
+MIN_ASK_SAMPLES = 3
+# Сколько самых дешёвых лотов коллекции опрашиваем на историю сделок (Tonnel)
+ACTIVITY_SAMPLE = int(os.getenv("GIFT_ACT_SAMPLE", "6")) or 6
+# Сколько дней храним точки истории сделок и макс. точек на модель
+SALES_TTL_DAYS = 90
+SALES_POINTS_MAX = 300
+# Типы событий Tonnel giftActivity, считаемые реальными сделками
+ACTIVITY_SALE_TYPES = {"SALE", "INTERNAL_SALE", "PREMARKET_SALE", "AUCTION"}
 # Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
 # Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
@@ -102,20 +112,44 @@ def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
             d = json.load(f)
-        if isinstance(d, dict) and isinstance(d.get("floors"), dict):
+        if isinstance(d, dict):
+            d.setdefault("floors", {})
             d.setdefault("samples", {})
+            d.setdefault("sales", {})
             return d
     except Exception:
         pass
-    return {"v": 2, "floors": {}, "samples": {}, "last_run": None}
+    return {"v": 3, "floors": {}, "samples": {}, "sales": {}, "last_run": None}
 
 
 def save_state(st):
+    st["v"] = 3
     st["last_run"] = datetime.utcnow().isoformat()
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False)
     os.replace(tmp, STATE_FILE)
+
+
+def prune_sales(state):
+    """Чистим историю сделок: TTL SALES_TTL_DAYS, кому больше — отрезаем хвост."""
+    cutoff = datetime.utcnow().timestamp() - SALES_TTL_DAYS * 86400
+    for key in list(state.get("sales", {}).keys()):
+        pts = state["sales"][key]
+        keep = []
+        for ts, price, kind in pts:
+            try:
+                t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                t = datetime.utcnow().timestamp()  # неизвестное время — считаем свежим
+            if t >= cutoff:
+                keep.append((ts, price, kind))
+        keep.sort(key=lambda p: p[0])
+        keep = keep[-SALES_POINTS_MAX:]
+        if keep:
+            state["sales"][key] = [list(p) for p in keep]
+        else:
+            del state["sales"][key]
 
 
 def ton_rub_rate() -> float:
@@ -445,61 +479,157 @@ def fragment_fetch(gift_name: str):
 def clean_rarity(rar: float) -> str:
     return f"{rar:.1f}".rstrip("0").rstrip(".")
 
+
+# ---------------- История реальных сделок (Tonnel) ----------------
+
+def tonnel_gift_activity(gift_name: str, gift_num):
+    """История сделок конкретного ПРЕДМЕТА (по номеру): SALE/INTERNAL_SALE/AUCTION
+    с ценой в TON и датой. Анонимный endpoint, должен отвечать 200.
+    Возвращает [(iso_ts, price_ton, model), ...]."""
+    if gift_num in (None, ""):
+        return []
+    try:
+        r = requests.post(
+            "https://gifts2.tonnel.network/api/giftActivity",
+            data=json.dumps({"gift_name": gift_name, "gift_num": int(gift_num)}),
+            headers=TONNEL_HEADERS, impersonate="chrome", timeout=40)
+        if r.status_code != 200:
+            return []
+        acts = r.json().get("activities") or []
+    except Exception:
+        return []
+    out = []
+    for a in acts:
+        if (a.get("type") or "").upper() not in ACTIVITY_SALE_TYPES:
+            continue
+        try:
+            price = float(a.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        model = (a.get("model") or "").strip()
+        if price > 0 and model and model != "—":
+            out.append((str(a.get("timestamp") or ""), price, model))
+    return out
+
+
+def record_sale_points(state, gift: str, model: str, price_ton: float, ts: str, kind: str):
+    """Один факт «по этой цене продавалась/исчезала вещь той же модели»."""
+    key = f"{gift}|{model}".lower()
+    bucket = state.setdefault("sales", {}).setdefault(key, [])
+    rec = [ts, round(float(price_ton), 2), kind]
+    if rec not in bucket:
+        bucket.append(rec)
+        return 1
+    return 0
+
+
+def collect_sales_history(all_lots: dict, state: dict):
+    """Опрашиваем историю сделок у ACTIVITY_SAMPLE самых дешёвых лотов Tonnel
+    каждой коллекции: события SALE этого предмета = реальные цены сделок
+    его модели (модели может отличаться от модели текущего листинга — пишем
+    именно по модели из события). История копится между прогонами."""
+    added, new_gift_models = 0, set()
+    for gift, lots in all_lots.items():
+        picked = sorted(
+            [l for l in lots
+             if l.get("venue") == "Tonnel" and l.get("gift_num") not in (None, "")
+             and l.get("price_ton", 0) > 0],
+            key=lambda l: l["price_ton"])[:ACTIVITY_SAMPLE]
+        for l in picked:
+            evs = tonnel_gift_activity(gift, l.get("gift_num"))
+            time.sleep(random.uniform(1.0, 2.0))
+            for ts, price, model in evs:
+                if record_sale_points(state, gift, model, price, ts, "api"):
+                    added += 1
+                    new_gift_models.add((gift, model))
+    prune_sales(state)
+    return added, new_gift_models
+
+
+def median_sample(vals):
+    vs = sorted(vals)
+    n = len(vs)
+    if not n:
+        return 0.0
+    mid = n // 2
+    return float(vs[mid]) if n % 2 else (vs[mid - 1] + vs[mid]) / 2.0
+
+
+def iqr_median(vals):
+    """Медиана с IQR-фильтром выбросов: отрезаем всё за пределами
+    [Q1 - 1.5*IQR, Q3 + 1.5*IQR]; если после фильтра пусто — сырая медиана."""
+    vs = sorted(float(v) for v in vals if v > 0)
+    if not vs:
+        return 0.0
+    q1 = median_sample(vs[: max(1, len(vs) // 2)] if len(vs) > 3 else vs)
+    q3 = median_sample(vs[len(vs) // 2:] if len(vs) > 3 else vs)
+    iqr = q3 - q1
+    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    core = [v for v in vs if lo <= v <= hi] or vs
+    return median_sample(core)
+
 # ---------------- Оценка ----------------
-# Правило «следующего лота»:
-# 1) референс лота = минимальная цена ДРУГИХ лотов той же модели (сам лот не учитываем),
-#    в той же валюте, что цена лота (TON);
-# 2) discount = (reference - price) / reference;
-# 3) чистая цена продажи = reference * (1 - комиссия маркета 10%), профит = чистая - покупка;
-# 4) выгодный = цена <= reference * 0.90 И профит > 0;
-# 5) редкость модели/фона/символа < 2% — отдельная метка (на планку не влияет);
-# 6) причина у сделки: "-N% от следующего лота".
+# Честная планка модели (market_reference), по приоритету:
+#  1) медиана реальных сделок (Sale-события из history, IQR-фильтр) — «good»;
+#  2) медиана сделок+исчезнувших лотов, перекрёстно с медианой ask-листингов — «ok»;
+#  3) медиана ask-листингов модели по всем трём маркетам — «weak» (консервативно).
+# Итог всегда min(планка, медиана ask-листингов), если ask-данные есть —
+# обвал рынка листингов не даёт завысить оценку.
+# Выгодный лот: цена ≤ планка*(1-DEAL_PCT) И чистыми после комиссий ≥ MIN_NET_RUB.
+# 5) редкость модели/фона/символа < 2% — отдельная метка (на планку не влияет).
 
 RARE_PCT = 2.0             # порог редкости модели/фона/символа (%)
 
 
-def get_model_floor(mlots, model, exclude_lot=None):
-    """Референс лота = минимальная цена ДРУГИХ лотов той же модели (TON).
-
-    Сам лот исключается: иначе он не может быть дешевле собственной цены.
-    Так «флор по модели» — это следующий по дешевизне сосед, а не минимум,
-    в который всегда попадает проверяемый лот.
-    Нет других лотов -> 0.0 (причина «нет флора»)."""
-    prices = [
-        l["price_ton"]
-        for l in mlots
-        if l is not exclude_lot
-        and l.get("model") == model
-        and l.get("price_ton", 0) > 0
-    ]
-    return float(min(prices)) if prices else 0.0
+def market_reference(gift: str, model: str, mlots: list, state: dict):
+    """(planca_ton | None, source_txt, quality) — качества: good/ok/weak."""
+    key = f"{gift}|{model}".lower()
+    pts = state.get("sales", {}).get(key, [])
+    api = [p for ts, p, k in pts if k == "api"]
+    gone = [p for ts, p, k in pts if k == "gone"]
+    asks = sorted(float(l["price_ton"]) for l in mlots if l.get("price_ton", 0) > 0)
+    ask_med = median_sample(asks) if len(asks) >= MIN_ASK_SAMPLES else 0.0
+    ref, src, quality = None, "", ""
+    if len(api) >= MIN_SALES:
+        ref = iqr_median(api)
+        src = f"медиана сделок ({len(api)})"
+        quality = "good"
+    elif len(api) + len(gone) >= MIN_SALES:
+        m = iqr_median(api + gone)
+        ref = min(m, ask_med) if ask_med else m
+        src = f"сделки+исчезновения ({len(api)}+{len(gone)})"
+        quality = "ok"
+    elif ask_med:
+        ref = ask_med
+        src = f"медиана листингов ({len(asks)})"
+        quality = "weak"
+    if ref and ask_med:
+        ref = min(ref, ask_med)
+    return ref, src, quality
 
 
 def evaluate_lot(price_ton: float, reference_ton: float, rate: float,
-                 fee_pct: float = None, min_discount: float = 0.10):
-    """Чистая оценка лота по правилу «следующего лота»:
-    цена <= референс * 0.90 И профит после комиссии 10% > 0. None -> отбросить.
-    reference_ton — минимальная цена ДРУГОГО лота той же модели."""
+                 fee_pct: float = None, min_discount: float = None):
+    """Чистая оценка против честной планки: дисконт ≥ DEAL_PCT
+    и чистый профит после комиссий ≥ MIN_NET_RUB. None -> отбросить."""
     if not reference_ton or reference_ton <= 0 or not price_ton or price_ton <= 0:
         return None
     fee_pct = RESELL_FEE_PCT if fee_pct is None else fee_pct
+    min_discount = DEAL_PCT / 100.0 if min_discount is None else min_discount
     if price_ton > reference_ton * (1.0 - min_discount) + 1e-9:
         return None
     discount = (reference_ton - price_ton) / reference_ton
     net_sell = reference_ton * (1.0 - fee_pct / 100.0)
     profit_ton = net_sell - price_ton
-    if profit_ton <= 0:
+    if profit_ton * rate < MIN_NET_RUB:
         return None
-    reason = "-%d%% от следующего лота" % round(discount * 100)
     return {
-        "floor_model": reference_ton,
         "reference_ton": reference_ton,
         "fair_ton": reference_ton,
         "discount": round(discount, 3),
         "profit_ton": round(profit_ton, 2),
-        "profit_rub": round(profit_ton * rate),
+        "profit_rub": int(round(profit_ton * rate)),
         "net_sell_ton": round(net_sell, 2),
-        "reason": reason,
     }
 
 
@@ -553,12 +683,12 @@ def debug_reject_line(gift, model, l, reference_ton, reason):
           % (gift, model, l["price_ton"], fl, ds, reason))
 
 
-def find_with_model_deals(all_lots, rate: float):
-    """Оценка по правилу «следующего лота»: для каждого лота референс —
-    минимальная цена ДРУГИХ лотов той же модели. Сделка: цена <= референс*0.9
-    и профит после комиссии 10% > 0. Референс считается из текущего скана,
-    поэтому он всегда свежий (не старше 10 минут)."""
+def find_with_model_deals(all_lots, rate: float, state=None):
+    """Оценка против честной планки модели: реальные сделки (приоритет),
+    консервативная медиана ask-листингов при малой выборке. Ставка
+    «перебей соседа» изъята — минимум листингом не измеряется."""
     import collections as _c
+    state = state if state is not None else {}
     diag = _c.Counter()
     reject_cnt = _c.Counter()
     deals = []
@@ -569,28 +699,18 @@ def find_with_model_deals(all_lots, rate: float):
             if l.get("price_ton", 0) > 0 and l.get("model"):
                 by_model.setdefault(l["model"], []).append(l)
         for model, mlots in by_model.items():
-            if len(mlots) < MIN_SAMPLES:
-                diag['мало_образцов'] += 1
-                continue
-            prices = sorted(l["price_ton"] for l in mlots if l.get("price_ton", 0) > 0)
-            if len(prices) < 2:
-                diag['флора_нет'] += 1
-                continue
-            # диагностика: разрыв между двумя самыми дешёвыми лотами модели
-            gap = (prices[1] - prices[0]) / prices[1] if prices[1] > 0 else 0.0
-            if gap >= 0.10:
-                diag['макс_скидка_>=10'] += 1
-            elif gap >= 0.05:
-                diag['макс_скидка_>=5'] += 1
-            else:
-                diag['макс_скидка_<5'] += 1
             rar = parse_model_rarity(model)
             floors = {}
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
+            reference_ton, src, quality = market_reference(gift, model, mlots, state)
+            if not reference_ton:
+                reasons = state.get("sales", {}).get(f"{gift}|{model}".lower(), [])
+                diag['мало_данных' if not reasons else 'мало_сервисных_точек'] += 1
+                reject_cnt['нет данных о рынке'] += len(mlots)
+                diag['отброшено'] += len(mlots)
+                continue
             for l in mlots:
-                # референс: минимум ДРУГИХ лотов модели (сам лот не учитываем)
-                reference_ton = get_model_floor(mlots, model, exclude_lot=l)
                 rare = rare_reason(model, l, mlots)
                 res = evaluate_lot(l["price_ton"], reference_ton, rate)
                 if not res:
@@ -604,7 +724,9 @@ def find_with_model_deals(all_lots, rate: float):
                     "gift": gift, "model": model, "rarity": rar,
                     "price_ton": l["price_ton"], "fair_ton": res["fair_ton"],
                     "reference_ton": res["reference_ton"],
-                    "fair_src": res["reason"], "rare": rare,
+                    "fair_src": "-%d%% от %s" % (round(res["discount"] * 100), src),
+                    "fair_quality": quality,
+                    "rare": rare,
                     "venue": l["venue"], "backdrop": l["backdrop"],
                     "symbol": l["symbol"], "gift_id": l.get("gift_id", ""),
                     "gift_num": l.get("gift_num", ""),
@@ -669,6 +791,8 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
     if d.get("net_rub"):
         extra += f" · чистыми ~{d['net_rub']:,} ₽ после комиссий".replace(",", " ")
+    if d.get("fair_quality") == "weak":
+        extra += " · оценка грубая (мало сделок по модели)"
     return {
         "id": lot_id[:100],
         "title": title[:200],
@@ -723,9 +847,10 @@ def ping_server():
         pass
 
 
-def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list):
+def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list, state=None, rate: float = 0.0):
     """Лоты GIFTS, которые были на проде, а теперь их НЕТ в полном снимке
-    конкретной площадки — реально купили/сняли. Помечаем gone (уйдут с ленты).
+    конкретной площадки — реально купили/сняли. Помечаем gone (уйдут с ленты),
+    их цены записываем в историю как суррогат сделки (kind='gone').
     fetch_ok: gift -> {venue: снимок_прочитан_целиком} — если площадка не прочитана
     целиком, маркировку для её лотов не делаем (иначе заметём живые лоты)."""
     if "--no-push" in sys.argv or not WORKER_SECRET:
@@ -752,10 +877,12 @@ def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list):
             return
         prod_rows = r.json().get("rows", [])
         gone = []
+        now_iso = datetime.utcnow().isoformat() + "Z"
         for row in prod_rows:
             lot_id = row.get("id", "")
             title = row.get("title", "")
             gift = title.split(" —")[0].strip()
+            model = title.split(" —", 1)[1].split(" (")[0].strip() if " —" in title else ""
             vk = {v for v in ("portals", "tonnel", "fragment") if str(lot_id).startswith(v + "-")}
             vk2 = next(iter(vk), "")
             venue = {"portals": "Portals", "tonnel": "Tonnel", "fragment": "Fragment"}.get(vk2)
@@ -766,6 +893,10 @@ def mark_gone_lots(all_lots: dict, fetch_ok: dict, lots: list):
             fresh_set = fresh_by_gift.get(gift, {}).get(venue, set())
             if lot_id not in fresh_set:
                 gone.append(lot_id)
+                # суррогат сделки: лот исчез по своей ask-цене (kind='gone')
+                price_rub = float(row.get("price") or 0)
+                if state is not None and model and price_rub > 0 and rate > 0:
+                    record_sale_points(state, gift, model, price_rub / rate, now_iso, "gone")
         if not gone:
             return
         for k in range(0, len(gone), 100):
@@ -817,6 +948,7 @@ def main():
     print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan старт: коллекций {len(watchlist)}")
     rate = ton_rub_rate()
     print(f"курс TON: {rate:.1f} ₽")
+    state = load_state()
     all_lots = {}
     fetch_ok = {}  # gift -> {'Tonnel': полный_снимок, 'Portals': ...}
     ok = []
@@ -842,7 +974,15 @@ def main():
                        ensure_ascii=False), "utf-8")
     except Exception as e:
         print(f"[!] снапшот не сохранён: {type(e).__name__}")
-    deals = find_with_model_deals(all_lots, rate)
+    # история реальных сделок: опрос Tonnel giftActivity по дешёвым лотам
+    try:
+        added, _ = collect_sales_history(all_lots, state)
+        n_pts = sum(len(v) for v in state.get("sales", {}).values())
+        n_mod = len(state.get("sales", {}))
+        print(f"история сделок: {n_pts} точек по {n_mod} моделям (+{added} новых) [api + gone]")
+    except Exception as e:
+        print(f"[!] история сделок не удалась: {type(e).__name__} {e}")
+    deals = find_with_model_deals(all_lots, rate, state)
     # за прогон не спамим ленту: топ-20 по размеру скидки, уникально по (gift|model|venue)
     deals.sort(key=lambda d: 1 - d["price_ton"] / d["fair_ton"])
     seen = set()
@@ -856,7 +996,8 @@ def main():
     deals = uniq[:20]
     print(f"выгодных: {len(deals)}")
     lots = [to_lot_dict(d, rate) for d in deals]
-    mark_gone_lots(all_lots, fetch_ok, lots)
+    mark_gone_lots(all_lots, fetch_ok, lots, state, rate)
+    save_state(state)
     if "--no-push" not in sys.argv:
         saved, skipped = push_to_server(lots)
         print(f"пуш: saved={saved} skipped={skipped}")
@@ -890,7 +1031,13 @@ def debug_reject_run(n: int = 50):
         all_lots[gift] = take
         budget -= len(take)
     print(f"[debug] взяли {sum(len(v) for v in all_lots.values())} лотов")
-    deals = find_with_model_deals(all_lots, rate)
+    state = load_state()
+    try:
+        n_pts = sum(len(v) for v in state.get("sales", {}).values())
+        print(f"[debug] история сделок в состоянии: {n_pts} точек по {len(state.get('sales', {}))} моделям")
+    except Exception:
+        pass
+    deals = find_with_model_deals(all_lots, rate, state)
     print(f"[debug] прошло фильтр: {len(deals)} из {sum(len(v) for v in all_lots.values())}")
     for d in deals[:5]:
         print("  [взят] %s | %s | %.2f TON | %s | +%.0f ₽" % (d["gift"], d["model"], d["price_ton"], d["fair_src"], d["net_rub"]))

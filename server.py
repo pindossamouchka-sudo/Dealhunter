@@ -1815,9 +1815,9 @@ async def api_worker_lots_ids(source: str = "TG", x_worker_secret: str = Header(
     pool = require_db()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, title FROM dh_lots WHERE source = $1 AND gone = FALSE LIMIT 2000", source
+            "SELECT id, title, price FROM dh_lots WHERE source = $1 AND gone = FALSE LIMIT 2000", source
         )
-    return {"rows": [{"id": r["id"], "title": r["title"]} for r in rows]}
+    return {"rows": [{"id": r["id"], "title": r["title"], "price": int(r["price"] or 0)} for r in rows]}
 
 
 class LotsGoneRequest(BaseModel):

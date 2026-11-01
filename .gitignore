@@ -9,3 +9,8 @@ __pycache__/
 *.session
 *.log
 .venv/
+# артефакты сканеров (данные прогонов, не код)
+gifts_snapshot.json
+gifts_state.json
+gifts_state.json.tmp
+tg_fresh.json
