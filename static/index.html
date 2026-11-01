@@ -866,6 +866,7 @@
     html.low-perf .ticker-track { animation: none; }
     html.low-perf .live-dot { animation: none; }
     html.low-perf .bg-grain { display: none; }
+    html.low-perf .bg-scene::after { animation: none; }
 
     /* ---------- ЗАГРУЗОЧНАЯ ЗАСТАВКА ----------
        Она же экран загрузки: пока грузится состояние, поверх приложения
@@ -1382,7 +1383,9 @@
       border: 1px solid var(--glass-border);
       background: var(--surface-1);
     }
-    .btn, .btn-icon, .btn-pill, .btn-large { border-radius: 0; }
+    .btn, .btn-icon { border-radius: 0; }
+    /* Кнопки мониторов — закруглённые */
+    .btn-rounded { border-radius: 999px !important; }
     .timer-badge { border-radius: 0; }
     .input-glass, .modal-sheet, .modal-card { border-radius: 0; }
     .modal-sheet { border-radius: 0; }
@@ -1491,11 +1494,11 @@
     .deck::-webkit-scrollbar { display: none; }
     .deck-card {
       position: relative; flex: 0 0 100%; height: 100%;
-      scroll-snap-align: start; scroll-snap-stop: always;
+      scroll-snap-align: start;
       display: flex; flex-direction: column; overflow: hidden;
       padding: 16px 16px 12px;
-      border-right: 1px solid var(--glass-stroke);
       background: var(--surface-1); color: var(--text-primary);
+      cursor: pointer;
     }
     .deck-card.is-lime { background: var(--accent); color: var(--on-accent); }
     .deck-card.is-inverse { background: var(--text-primary); color: var(--bg-app); }
@@ -1823,7 +1826,6 @@
       scrollbar-width: none;
       -webkit-overflow-scrolling: touch;
       contain: paint;
-      perspective: 1300px; perspective-origin: 50% 42%;
     }
     .deck::-webkit-scrollbar { display: none; }
 
@@ -1836,9 +1838,12 @@
       color: var(--text-primary);
       border: 1px solid rgba(var(--edge), 0.10);
       border-radius: 14px;
-      box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-      scroll-snap-align: start; scroll-snap-stop: always;
+      box-shadow: 0 18px 44px -26px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      scroll-snap-align: start;
       backface-visibility: hidden;
+      /* Слой-промоция: карточка растеризуется один раз и дальше
+         слайдится на GPU — ключ к плавному свайпу на iOS/Android */
+      transform: translateZ(0);
       --dim: 0;
     }
     /* затемнение соседних обложек (scroll-linked) */
@@ -1851,7 +1856,7 @@
       background: linear-gradient(168deg, var(--pearl-a) 0%, var(--pearl-b) 70%);
       color: var(--ink-solid);
       border-color: rgba(var(--ink), 0.12);
-      box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 1), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+      box-shadow: 0 18px 44px -26px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.75);
     }
     .deck-card.is-pearl::after { background: var(--bg-fade); }
 
@@ -1888,7 +1893,13 @@
     .iz.f2 { right: -9%; bottom: 12%; width: 38%; --rot: 15deg; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20fill%3D%22%23FFD66B%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%280%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%2872%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28144%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28216%29%22%2F%3E%3Cellipse%20cx%3D%220%22%20cy%3D%22-27%22%20rx%3D%2214%22%20ry%3D%2221%22%20transform%3D%22rotate%28288%29%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%2212.5%22%20fill%3D%22%23E5893F%22%20stroke%3D%22%23FFF6EA%22%20stroke-width%3D%223%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); animation: orn-bob 9s var(--ease-smooth) -4s infinite alternate; }
     .iz.w1 { left: 6%; top: 6%; width: 88%; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23F2FAFF%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20transform%3D%22rotate%280%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%2860%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28120%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28180%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28240%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28300%29%22%3E%3Cpath%20d%3D%22M0%200%20V-40%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-20%20L-8%20-28%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L4%20-38%22%2F%3E%3Cpath%20d%3D%22M0%20-34%20L-4%20-38%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%223.8%22%20fill%3D%22%23F2FAFF%22%20stroke%3D%22none%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); animation: orn-spin 46s linear infinite; }
     .iz.w2 { left: -8%; bottom: -4%; width: 30%; background-image: url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23D9EDFB%22%20stroke-width%3D%224.2%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20transform%3D%22translate%2850%2050%29%22%3E%3Cg%20transform%3D%22rotate%280%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%2860%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28120%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28180%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28240%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22rotate%28300%29%22%3E%3Cpath%20d%3D%22M0%200%20V-38%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L9%20-25%22%2F%3E%3Cpath%20d%3D%22M0%20-16%20L-9%20-25%22%2F%3E%3C%2Fg%3E%3Ccircle%20r%3D%223.8%22%20fill%3D%22%23D9EDFB%22%20stroke%3D%22none%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E"); animation: orn-spin 58s linear infinite reverse; }
-    html[data-theme='winter'] .deck-card.is-pearl .iz { filter: drop-shadow(0 2px 5px rgba(46, 92, 138, 0.45)); }
+    /* Декор: анимируется только у активного лота (экономия CPU/GPU),
+       на слабых устройствах декор полностью статичен, фильтры убраны
+       (drop-shadow на анимированном SVG — дорог для Android). */
+    .deck-card .iz { animation-play-state: paused; }
+    .deck-card.is-active .iz { animation-play-state: running; }
+    html.low-perf .deck-card .iz,
+    html.low-perf .deck-card.is-active .iz { animation: none; }
 
     @keyframes orn-bob {
       from { transform: rotate(var(--rot, 0deg)) translate3d(0, -7px, 0); }
@@ -1902,22 +1913,12 @@
 
 
     /* ---------- контент обложки ---------- */
+    /* Плавный свайп: контент статичен и всегда виден. Никаких переходов
+       opacity/transform на него во время прокрутки — они «догоняли»
+       после остановки свайпа и выглядели как зависание. */
     .cv-head, .cv-kicker, .cv-title, .cv-tags, .cv-price, .cv-profit, .cv-cta, .cv-foot {
       position: relative; z-index: 2;
-      opacity: 0; transform: translate3d(0, 16px, 0);
-      transition: opacity 0.55s var(--ease-out), transform 0.75s var(--ease-out);
     }
-    .deck-card.is-active .cv-head, .deck-card.is-active .cv-kicker,
-    .deck-card.is-active .cv-title, .deck-card.is-active .cv-tags,
-    .deck-card.is-active .cv-price, .deck-card.is-active .cv-profit,
-    .deck-card.is-active .cv-cta, .deck-card.is-active .cv-foot { opacity: 1; transform: none; }
-    .deck-card.is-active .cv-kicker { transition-delay: 0.05s; }
-    .deck-card.is-active .cv-title { transition-delay: 0.1s; }
-    .deck-card.is-active .cv-tags { transition-delay: 0.16s; }
-    .deck-card.is-active .cv-price { transition-delay: 0.2s; }
-    .deck-card.is-active .cv-profit { transition-delay: 0.25s; }
-    .deck-card.is-active .cv-cta { transition-delay: 0.3s; }
-    .deck-card.is-active .cv-foot { transition-delay: 0.36s; }
 
     .cv-head { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
     .cv-issue { font-family: var(--font-num); font-size: 8.5px; letter-spacing: 0.14em; color: var(--accent-ink); }
@@ -2914,6 +2915,21 @@ function lotCategory(title, desc) {
       }
     }
 
+    // Deep-link открытия конкретного лота: /…/?startapp=<id>, /…/?lot=<id>
+    // или start_param из Telegram (t.me/<bot>?startapp=<id>).
+    function bootLotDeepLink() {
+      let p = '';
+      try { p = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || (tg && tg.startParam) || ''; } catch (e) {}
+      if (!p) {
+        try { const qs = new URLSearchParams(location.search); p = qs.get('lot') || qs.get('startapp') || ''; } catch (e) {}
+      }
+      if (!p) return '';
+      try { p = decodeURIComponent(String(p)); } catch (e) {}
+      p = String(p).replace(/^lot[-_]?/i, '').trim();
+      if (!p || p.length > 120) return '';
+      return p;
+    }
+
     async function syncState() {
       try {
         const res = await fetch('/api/state', { headers: authHeaders() });
@@ -3174,6 +3190,12 @@ function lotCategory(title, desc) {
       }
     }
 
+    // Трекинг тапа: отличаем «тап по лоту» от «свайпа ленты»,
+    // чтобы при прокрутке лента не открывала деталь случайно.
+    document.addEventListener('pointerdown', (e) => {
+      window.__lastPointer = { x: e.clientX || 0, y: e.clientY || 0, t: Date.now() };
+    }, { capture: true, passive: true });
+
     document.addEventListener('click', (e) => {
       const el = e.target.closest('[data-action]');
       if (!el) return;
@@ -3265,7 +3287,13 @@ function lotCategory(title, desc) {
         }
       }
       else if (action === 'search-reset') { state.searchQuery = ''; loadFeed(false); }
-      else if (action === 'open-detail') { state.detailId = val; window.scrollTo(0, 0); state.animIn = true; render(); }
+      else if (action === 'open-detail') {
+        // Гвард от свайпа: если между нажатием и отпуском палец сдвинулся
+        // сильнее 12px или зажат дольше 700мс — это прокрутка, не клик.
+        const p = window.__lastPointer;
+        if (p && (Math.abs((e.clientX || p.x) - p.x) > 12 || Math.abs((e.clientY || p.y) - p.y) > 12)) return;
+        state.detailId = val; window.scrollTo(0, 0); state.animIn = true; render();
+      }
       else if (action === 'close-detail') { state.detailId = null; state.animIn = true; render(); }
       else if (action === 'save-lot') { e.stopPropagation(); toggleSaveLot(val); }
       else if (action === 'claim-and-open') {
@@ -3335,10 +3363,11 @@ function lotCategory(title, desc) {
       const pctLabel = '−' + String(pct).replace('.', ',') + '%';
       const tags = (item.tags || []).map(t => esc(t)).join(' · ');
       return `
-        <article class="deck-card ${tone}${viewed ? ' is-viewed' : ''}" id="lot-card-${esc(item.id)}">
+        <article class="deck-card ${tone}${viewed ? ' is-viewed' : ''}" id="lot-card-${esc(item.id)}" data-action="open-detail" data-val="${esc(item.id)}">
           <span class="cv-frame" aria-hidden="true"></span>
           <i class="cv-corner tl" aria-hidden="true"></i><i class="cv-corner br" aria-hidden="true"></i>
-          <div class="cv-object" aria-hidden="true"><span class="iz m1"></span><span class="iz m2"></span><span class="iz m3"></span><span class="iz f1"></span><span class="iz f2"></span><span class="iz w1"></span><span class="iz w2"></span></div>
+          <!-- декоративные анимированные орнаменты (cv-object) убраны:
+               они крутились бесконечно на каждой карточке и роняли fps свайпа -->
 
           <header class="cv-head">
             <span class="cv-issue t-num">${no}<i>/${String(total).padStart(2, '0')}</i></span>
@@ -3373,32 +3402,27 @@ function lotCategory(title, desc) {
     }
 
     function updateCoverTransforms() {
-      const deck = document.getElementById('deck');
-      if (!deck) return;
-      const W = deck.clientWidth || 1;
-      const n = deck.children.length;
-      const base = deck.scrollLeft / W;
-      for (let i = 0; i < n; i++) {
-        const t = Math.max(-1.4, Math.min(1.4, base - i));
-        const at = Math.abs(t);
-        const c = deck.children[i];
-        c.style.transform = 'rotateY(' + (t * -19).toFixed(2) + 'deg) translateZ(' + (-at * 230).toFixed(0) + 'px) scale(' + (1 - Math.min(0.15, at * 0.11)).toFixed(3) + ')';
-        c.style.setProperty('--dim', Math.min(0.7, at * 0.8).toFixed(3));
-        const zi = Math.round(base) === i ? 1000 : Math.max(0, 900 - Math.round(at * 700));
-        if (c.style.zIndex !== String(zi)) c.style.zIndex = zi;
-      }
+      /* Coverflow с покадровым JS-transform убран: он давал рывки,
+         залипания свайпа и наезды углов соседних карточек.
+         Свайп теперь нативный scroll-snap без перезаписи стилей,
+         а затухание соседей держит чистый CSS (.deck-card / .is-active). */
     }
 
+    let __deckActiveIdx = -1;
     function syncDeckActive() {
       const deck = document.getElementById('deck');
       if (!deck) return;
       const w = deck.clientWidth || 1;
       const idx = Math.max(0, Math.min(deck.children.length - 1, Math.round(deck.scrollLeft / w)));
+      // Оптимизация свайпа: классы переключаем только при смене активного
+      // лота, а не у всех карточек каждый кадр прокрутки.
+      if (idx === __deckActiveIdx) return;
       const cards = deck.children;
-      for (let i = 0; i < cards.length; i++) {
-        if (i === idx) cards[i].classList.add('is-active');
-        else cards[i].classList.remove('is-active');
+      if (__deckActiveIdx >= 0 && __deckActiveIdx < cards.length) {
+        cards[__deckActiveIdx].classList.remove('is-active');
       }
+      if (cards[idx]) cards[idx].classList.add('is-active');
+      __deckActiveIdx = idx;
     }
 
     function renderLotCard(item, i) {
@@ -3462,6 +3486,8 @@ function lotCategory(title, desc) {
         const deck1 = document.getElementById('deck');
         if (deck1) {
           if (deckLeft) deck1.scrollLeft = deckLeft;
+          __deckActiveIdx = -1; // карточки пересозданы — сбрасываем кэш
+          __meterIdx = -1;
           syncDeckActive();
           updateDeckMeter();
           updateCoverTransforms();
@@ -3469,14 +3495,19 @@ function lotCategory(title, desc) {
       }
     }
 
+    let __meterIdx = -1;
     function updateDeckMeter() {
       const d = document.getElementById('deck');
       if (!d) return;
       const n = d.children.length || 1;
       const h = d.clientWidth || 1;
       const i = Math.min(n, Math.round(d.scrollLeft / h) + 1);
-      const c = document.getElementById('deck-count');
-      if (c) c.textContent = String(i).padStart(2, '0') + ' / ' + String(n).padStart(2, '0');
+      // Текст счётчика — только при смене активного лота (каждый кадр — дорого).
+      if (i !== __meterIdx) {
+        __meterIdx = i;
+        const c = document.getElementById('deck-count');
+        if (c) c.textContent = String(i).padStart(2, '0') + ' / ' + String(n).padStart(2, '0');
+      }
       const bar = document.getElementById('deck-bar');
       if (bar) {
         const max = Math.max(1, d.scrollWidth - d.clientWidth);
@@ -3649,7 +3680,6 @@ function lotCategory(title, desc) {
               : `<article class="deck-card is-active">
                    <span class="cv-frame" aria-hidden="true"></span>
                    <i class="cv-corner tl" aria-hidden="true"></i><i class="cv-corner br" aria-hidden="true"></i>
-                   <div class="cv-object" aria-hidden="true"><span class="iz m1"></span><span class="iz m2"></span><span class="iz m3"></span><span class="iz f1"></span><span class="iz f2"></span><span class="iz w1"></span><span class="iz w2"></span></div>
                    <header class="cv-head"><span class="cv-issue t-num">00<i>/00</i></span><span class="cv-src t-num">${esc(state.city)}</span></header>
                    <p class="cv-kicker">Пусто</p>
                    <h2 class="cv-title">Ничего не нашли.</h2>
@@ -3679,7 +3709,7 @@ function lotCategory(title, desc) {
         contentHtml = `
           <div class="top-header row-between">
             <div class="screen-title">Авто-мониторы</div>
-            <button class="btn btn-pill btn-accent" data-action="new-monitor-modal">
+            <button class="btn btn-pill btn-accent btn-rounded" data-action="new-monitor-modal">
               <i data-lucide="plus" style="width:14px; height:14px;"></i><span>Создать</span>
             </button>
           </div>
@@ -3938,7 +3968,7 @@ function lotCategory(title, desc) {
               <input type="number" id="m-margin" class="input-glass" inputmode="numeric" min="1" max="90" placeholder="15" value="15" />
               <div class="field-label">Уточнения (необязательно)</div>
               <input type="text" id="m-extra" class="input-glass" placeholder="256 ГБ, синий, отличное состояние" />
-              <button class="btn btn-large btn-accent" data-action="create-monitor-btn">
+              <button class="btn btn-large btn-accent btn-rounded" data-action="create-monitor-btn">
                 <i data-lucide="check" style="width:18px; height:18px;"></i>
                 <span>Запустить мониторинг</span>
               </button>
@@ -4148,19 +4178,19 @@ function lotCategory(title, desc) {
       };
 
       run(shell.querySelector('.deck-top'), [
-        { opacity: 0, transform: 'translate3d(0, -34px, 0)' },
+        { opacity: 0, transform: 'translate3d(0, -24px, 0)' },
         { opacity: 1, transform: 'none' }
-      ], { duration: 560, easing: EASE });
+      ], { duration: 400, easing: EASE });
 
       run(shell.querySelector('.deck'), [
-        { opacity: 0, transform: 'translate3d(0, 26px, 0) scale(0.975)' },
-        { opacity: 1, transform: 'none' }
-      ], { duration: 700, delay: 90, easing: EASE });
+        { opacity: 0 },
+        { opacity: 1 }
+      ], { duration: 380, delay: 60, easing: EASE });
 
       run(shell.querySelector('.deck-meter'), [
-        { opacity: 0, transform: 'translate3d(0, 18px, 0)' },
+        { opacity: 0, transform: 'translate3d(0, 14px, 0)' },
         { opacity: 1, transform: 'none' }
-      ], { duration: 520, delay: 160, easing: EASE });
+      ], { duration: 380, delay: 110, easing: EASE });
 
       const vh = window.innerHeight || 800;
       const cards = Array.prototype.slice
@@ -4171,9 +4201,9 @@ function lotCategory(title, desc) {
       cards.forEach((el, i) => {
         const dir = i % 2 ? 1 : -1;
         run(el, [
-          { opacity: 0, transform: `translate3d(${dir * 54}px, 32px, 0) rotate(${dir * 2.2}deg) scale(0.94)` },
+          { opacity: 0, transform: `translate3d(${dir * 30}px, 20px, 0) rotate(${dir * 1.2}deg) scale(0.97)` },
           { opacity: 1, transform: 'none' }
-        ], { duration: 720, delay: 140 + i * (low ? 40 : 62), easing: SPRING });
+        ], { duration: 440, delay: 90 + i * (low ? 30 : 40), easing: SPRING });
       });
 
       const dock = shell.querySelector('.floating-dock-wrap');
@@ -4192,9 +4222,9 @@ function lotCategory(title, desc) {
           try {
             btn.style.animation = 'none';
             btn.animate([
-              { opacity: 0, transform: 'translate3d(' + (side * 120) + 'px, 64px, 0) scale(0.4) rotate(' + (side * 14) + 'deg)' },
+              { opacity: 0, transform: 'translate3d(' + (side * 90) + 'px, 42px, 0) scale(0.6) rotate(' + (side * 8) + 'deg)' },
               { opacity: 1, transform: 'none' }
-            ], { duration: 760, delay: 420 + k * 90, fill: 'backwards', easing: SPRING });
+            ], { duration: 520, delay: 280 + k * 70, fill: 'backwards', easing: SPRING });
           } catch (e) {}
         });
       }
@@ -4290,10 +4320,18 @@ function lotCategory(title, desc) {
     (async () => {
       try { state.sessionToken = localStorage.getItem('dh_session'); } catch (e) {}
       const hadToken = await redeemLoginToken();
+      // Deep-link из Telegram: t.me/<bot>?startapp=<lot_id> открывает сам лот,
+      // а не главный экран. Если лот всё ещё в ленте — сразу покажем деталь.
+      const bootLot = bootLotDeepLink();
+      if (bootLot) { state.detailId = bootLot; try { history.replaceState(null, '', location.pathname); } catch (e) {} }
       if (!RAW_INIT_DATA && !state.sessionToken) {
         // нет ни Telegram-подписи, ни сессии — сразу.getField экран входа не нужен, syncState покажет welcome
       }
       await syncState();
+      if (bootLot) {
+        if (state.listings.find(x => x.id === bootLot)) showToast('Открыли лот из уведомления');
+        else showToast('Лот уже убыл из ленты — смотрим свежие находки');
+      }
       intro.ready();
 
       // Авто-обновление ленты: новые лоты подтягиваются сами, без ручного refresh

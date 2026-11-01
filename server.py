@@ -63,7 +63,7 @@ TRIAL_DAYS = 3
 REFERRAL_BONUS_DAYS = 3
 MAX_REF_DAYS_PER_MONTH = 30
 MAX_TRIALS_PER_IP = 3
-LOT_TTL_HOURS = 6
+LOT_TTL_HOURS = int(os.getenv("LOT_TTL_HOURS", "72"))
 ADVISORY_LOCK_ID = 94827165
 HEARTBEAT_SEC = 20
 
@@ -1049,7 +1049,11 @@ async def monitor_scanner_loop():
                         kb = InlineKeyboardMarkup(
                             inline_keyboard=[
                                 [InlineKeyboardButton(text=f"🔥 Открыть на {lot['source']}", url=lot["url"])],
-                                [InlineKeyboardButton(text="⚡ Открыть DealHunter", web_app=WebAppInfo(url=WEBAPP_URL))],
+                                # Deep-link прямо в лот внутри мини-аппа (не на главный экран)
+                                [InlineKeyboardButton(
+                                    text="⚡ Открыть лот в DealHunter",
+                                    url=f"https://t.me/{BOT_USERNAME_CACHE}?startapp={quote(str(lot['id']))}",
+                                )],
                             ]
                         )
                         msg_text = (
