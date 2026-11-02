@@ -59,9 +59,10 @@ TONNEL_HEADERS = {
 PORTALS_BASE = "https://portal-market.com/api"
 
 # Пейджинг по каждому маркету: 3 страницы × limit = сколько листингов читаем
-TONNEL_PAGES = 3
+# (в quick-режиме обрезается до 1 страницы — см. apply_mode)
+TONNEL_PAGES = int(os.getenv("GIFT_TONNEL_PAGES", "3"))
 TONNEL_LIMIT = 30       # сервер Tonnel не принимает limit > 30
-PORTALS_PAGES = 3
+PORTALS_PAGES = int(os.getenv("GIFT_PORTALS_PAGES", "3"))
 PORTALS_LIMIT = 30
 
 # Порог «выгодности»: цена ≤ планки минус DEAL_PCT%
@@ -83,6 +84,9 @@ SALES_POINTS_MAX = 300
 ACTIVITY_SALE_TYPES = {"SALE", "INTERNAL_SALE", "PREMARKET_SALE", "AUCTION"}
 # Антибот-пауза между запросами
 SLEEP_MIN, SLEEP_MAX = 2.0, 4.5
+# Режимы прогонов: quick (короткий cron) / full (ручной или дефолт).
+# Скольким коллекциям за quick-прогон (каталог обходит за несколько циклов)
+QUICK_SLICE = int(os.getenv("GIFT_QUICK_SLICE", "8"))
 # Сколько дешёвых лотов Fragment открываем по-детально (чтобы узнать модель)
 FRAGMENT_TOP = 2
 
@@ -114,10 +118,11 @@ def load_state():
             d.setdefault("floors", {})
             d.setdefault("samples", {})
             d.setdefault("sales", {})
+            d.setdefault("cursor", 0)
             return d
     except Exception:
         pass
-    return {"v": 3, "floors": {}, "samples": {}, "sales": {}, "last_run": None}
+    return {"v": 3, "floors": {}, "samples": {}, "sales": {}, "cursor": 0, "last_run": None}
 
 
 def save_state(st):
@@ -994,17 +999,45 @@ def mark_replaced_lots(source: str, lots: list):
         print(f"[!] замена старых лотов {source} не удалась: {e}")
 
 
+def apply_mode(mode: str):
+    """quick: 1 страница Tonnel/Portals, 4 точки истории вместо 8 — чтобы
+    прогон укладывался в ~10 минут (cron GitHub Actions каждые 15 мин).
+    full: как раньше, весь каталог. Возвращает текст для лога."""
+    global TONNEL_PAGES, PORTALS_PAGES, ACTIVITY_SAMPLE
+    if mode == "quick":
+        TONNEL_PAGES = 1
+        PORTALS_PAGES = 1
+        ACTIVITY_SAMPLE = 4
+        return "quick (1 страница Tonnel/Portals, ACTIVITY_SAMPLE=4)"
+    return "full (весь каталог, полный пейджинг)"
+
+
 def main():
+    is_debug = "--debug-reject" in sys.argv
+    if is_debug:
+        debug_reject_run()
+        return
+    mode = ("full" if "--full" in sys.argv
+            else "quick" if "--quick" in sys.argv
+            else os.getenv("GIFT_SCAN_MODE", "full"))
+    mode_txt = apply_mode(mode)
     ping_server()
     watchlist = load_watchlist()
-    print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan старт: коллекций {len(watchlist)}")
+    print(f"[{datetime.utcnow().isoformat()}Z] gifts_scan старт: режим {mode_txt}, коллекций {len(watchlist)}")
     rate = ton_rub_rate()
     print(f"курс TON: {rate:.1f} ₽")
     state = load_state()
+    scan = watchlist
+    if mode == "quick" and len(watchlist) > QUICK_SLICE:
+        start = int(state.get("cursor") or 0) % len(watchlist)
+        scan = [watchlist[(start + i) % len(watchlist)] for i in range(QUICK_SLICE)]
+        state["cursor"] = (start + QUICK_SLICE) % len(watchlist)
+        print(f"quick-окно: {QUICK_SLICE} коллекций от позиции {start} (каталог обойдёт за "
+              f"{-(-len(watchlist) // QUICK_SLICE)} прогонов)")
     all_lots = {}
     fetch_ok = {}  # gift -> {'Tonnel': полный_снимок, 'Portals': ...}
     ok = []
-    for gift in watchlist:
+    for gift in scan:
         t_lots, _, t_full = tonnel_fetch_pages(gift)
         time.sleep(random.uniform(SLEEP_MIN, SLEEP_MAX))
         p_lots, _, p_full = portals_fetch_pages(gift)
@@ -1053,7 +1086,9 @@ def main():
     if "--no-push" not in sys.argv:
         saved, skipped = push_to_server(lots)
         print(f"пуш: saved={saved} skipped={skipped}")
-        if saved > 0:
+        # quick пушит только своё окно: глобальную замену делаем только в full,
+        # иначе сметём лоты коллекций, не входящих в текущее окно
+        if saved > 0 and mode != "quick":
             mark_replaced_lots("GIFTS", lots)
     else:
         print(f"пуш: off (--no-push), лотов к пушу: {len(lots)}")

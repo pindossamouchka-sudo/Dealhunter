@@ -1,0 +1,84 @@
+# Сканер NFT-подарков (gifts_scan.py) на GitHub Actions.
+# ПК и VPN пользователя не нужны: скан идёт из облака.
+#
+# • Расписание: каждые 15 минут — режим quick
+#   (8 коллекций за прогон по вращающемуся курсору; 1 страница Tonnel
+#   и Portals, 4 точки истории сделок → ~5–8 минут на прогон).
+# • Ручной запуск (workflow_dispatch) — режим full
+#   (весь каталог, полный пейджинг, глобальная замена лотов на проде).
+#
+# Секреты (GitHub → Settings → Secrets and variables → Actions):
+#   WORKER_SECRET — секрет /api/worker/ingest (совпадает с .env)
+#   SERVER_URL    — адрес Render-сервера (совпадает с .env)
+# Ничего секретного в репозиторий не попадает: gifts_state.json
+# (история сделок) проворачивается через actions/cache и в .gitignore.
+#
+# Состояние сканера (история сделок gifts_state.json) сохраняется между
+# прогонами через actions/cache: restore-keys подбирает последний снапшот,
+# каждый прогон сохраняет новый ключ gifts-state-<run_id>.
+# Если кэш вытеснился — история начнёт копиться заново, лента продолжит
+# работать (планка от соседей площадки не зависит от истории).
+
+name: scan-gifts
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Режим скана"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - quick
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scan-gifts
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Зависимости сканера
+        run: |
+          python -m pip install --upgrade pip
+          pip install curl_cffi httpx python-dotenv fragment-ton-api
+
+      - name: Восстановить состояние сканера (история сделок)
+        uses: actions/cache/restore@v4
+        with:
+          path: gifts_state.json
+          key: gifts-state-${{ github.run_id }}
+          restore-keys: |
+            gifts-state
+
+      - name: Скан подарков
+        env:
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          SERVER_URL: ${{ secrets.SERVER_URL }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then MODE="quick"; else MODE="${{ inputs.mode }}"; fi
+          echo "Режим: $MODE"
+          python -u gifts_scan.py "--$MODE"
+
+      - name: Сохранить состояние сканера
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: gifts_state.json
+          key: gifts-state-${{ github.run_id }}
