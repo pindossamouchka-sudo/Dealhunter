@@ -75,7 +75,7 @@ MIN_NET_RUB = 500
 # Минимальное число РЕАЛЬНЫХ сделок (Sale-событий), чтобы считать медиану честной
 MIN_SALES = 5
 # Сколько самых дешёвых лотов коллекции опрашиваем на историю сделок (Tonnel)
-ACTIVITY_SAMPLE = int(os.getenv("GIFT_ACT_SAMPLE", "6")) or 6
+ACTIVITY_SAMPLE = int(os.getenv("GIFT_ACT_SAMPLE", "8")) or 8
 # Сколько дней храним точки истории сделок и макс. точек на модель
 SALES_TTL_DAYS = 90
 SALES_POINTS_MAX = 300
@@ -567,16 +567,15 @@ def iqr_median(vals):
     return median_sample(core)
 
 # ---------------- Оценка ----------------
-# Честная планка модели (market_reference), по приоритету:
-#  1) медиана реальных сделок (Sale-события из history, IQR-фильтр) — «good»;
-#  2) медиана сделок+исчезнувших лотов (их купили/сняли по своей ask-цене) — «ok»;
-#  3) СОСЕДИ ТОЙ ЖЕ ПЛОЩАДКИ: флор других лотов той же модели там, где лот
-#     продаётся («перебей соседа здесь и сейчас», проверяется глазами) — «weak».
-# ЧУЖИЕ дорогие asks больше НЕ завышают планку: Tonnel может вешать 600 TON,
-# а на Portals floor той же модели 420 — медиана таких листингов рождает
-# фантомные «-30%». Итог всегда min(планка, самый дешёвый сосед любой площадки
-# того же лота): если текущие asks обвалились, устаревшая медиана сделок
-# не завысит оценку.
+# Честная планка модели (market_reference) = min из двух источников:
+#  1) флор соседа той же площадки — других лотов той же модели там, где
+#     продаётся лот (≥2 соседей); лот должен быть дешевле ВТОРОГО по
+#     минимальности — иначе undercut-продажа нереальна;
+#  2) медиана РЕАЛЬНЫХ сделок (Tonnel giftActivity + исчезнувшие лоты) —
+#     учитывается даже при 1-2 точках: продано по 280 — значит asks по 400
+#     соседей ничего не стоят.
+# Чужие дорогие asks (Tonnel 600 при Portals floor 420) планкой больше
+# не служат: только соседи той же площадки или факты продаж.
 # Выгодный лот: цена ≤ планка*(1-DEAL_PCT) И чистыми после комиссий ≥ MIN_NET_RUB.
 
 RARE_PCT = 2.0             # порог редкости модели/фона/символа (%)
@@ -588,48 +587,68 @@ def market_reference(gift: str, model: str, mlots: list, state: dict,
                      exclude_lot=None):
     """(planca_ton | None, source_txt, quality) — качества: good/ok/weak.
 
-    exclude_lot — оцениваемый лот: он не участвует в планке (иначе лот не может
-    быть дешевле собственной цены)."""
+    Планка = min из:
+      • флор соседа той же площадки — других лотов той же модели там, где
+        продаётся лот (нужно ≥2 соседей, чтобы верить); лот дешевле ВТОРОГО
+        по минимальности только тогда, когда мы чуть уточнённо считаем
+        соседа «рынком»;
+      • медиана РЕАЛЬНЫХ сделок (Tonnel giftActivity API + исчезнувшие лоты)
+        — учитывается при любом числе точек: даже пара свежих продаж
+        задавливает завышенные asks соседей.
+
+    exclude_lot — оцениваемый лот (в планку не входит)."""
     key = f"{gift}|{model}".lower()
     pts = state.get("sales", {}).get(key, [])
-    api = [p for ts, p, k in pts if k == "api"]
-    gone = [p for ts, p, k in pts if k == "gone"]
+    api = [float(p) for ts, p, k in pts if k == "api" and p > 0]
+    gone = [float(p) for ts, p, k in pts if k == "gone" and p > 0]
 
-    # соседи той же модели (без оцениваемого лота)
     others = [l for l in mlots
               if l is not exclude_lot
               and l.get("price_ton", 0) > 0]
-    cross_floor = min(float(l["price_ton"]) for l in others) if others else 0.0
 
-    # флор с той же площадки, где продаётся сам лот (weak-планка)
-    local_peers = []
+    floor_ref, floor_src = None, ""
+    same_venue = None
     if exclude_lot is not None:
         v = exclude_lot.get("venue")
-        local_peers = sorted(float(l["price_ton"]) for l in others
-                             if l.get("venue") == v)
-    elif mlots:
-        # без привязки к лоту (офлайн-проверка): берём все цены
-        local_peers = sorted(float(l["price_ton"]) for l in mlots)
+        same_venue = sorted(float(l["price_ton"]) for l in others
+                            if l.get("venue") == v)
+        if len(same_venue) >= MIN_LOCAL_PEERS:
+            floor_ref = same_venue[0]
+            floor_src = f"флор соседа {v} ({len(same_venue)})"
+    if not floor_ref and len(others) >= MIN_LOCAL_PEERS + 1:
+        # соседей «своих» нет — самый дешёвый чужой лот той же модели
+        floor_ref = min(float(l["price_ton"]) for l in others)
+        floor_src = f"флор соседа другой площадки ({len(others)})"
 
-    ref, src, quality = None, "", ""
-    if len(api) >= MIN_SALES:
-        ref = iqr_median(api)
-        src = f"медиана сделок ({len(api)})"
-        quality = "good"
-    elif len(api) + len(gone) >= MIN_SALES:
-        ref = iqr_median(api + gone)
-        src = f"сделки+исчезновения ({len(api)}+{len(gone)})"
-        quality = "ok"
-    elif len(local_peers) >= MIN_LOCAL_PEERS:
-        ref = local_peers[0]
-        src = f"соседи {exclude_lot.get('venue') if exclude_lot else ''} ({len(local_peers)})"
-        quality = "weak"
+    sale_vals = api + gone
+    sale_ref = iqr_median(sale_vals) if sale_vals else 0.0
+
+    cand, labels = [], []
+    if floor_ref:
+        cand.append(floor_ref)
+        labels.append(floor_src)
+    if sale_ref > 0:
+        cand.append(sale_ref)
+        n_api, n_gone = len(api), len(gone)
+        sale_label = (f"медиана сделок ({n_api})"
+                      if not n_gone else f"сделки+исчезновения ({n_api}+{n_gone})")
+        labels.append(sale_label)
+
+    ref = min(cand) if cand else None
     if not ref:
         return None, "", ""
-    # глобальный кэп: обвал сегодняшних asks гасит и медиану сделок
-    if cross_floor and cross_floor < ref:
-        ref = cross_floor
-        src += " (флор-сосед ниже)"
+    src = labels[cand.index(ref)] if ref in cand else labels[-1]
+    if ref == sale_ref and float(floor_ref or 0) > ref:
+        src += " (продажи ниже соседа)"
+    # жёсткий кэп: чужой (любой площадки) самый дешёвый лот той же модели.
+    # Лот должен быть дешевле 2-го по минимальности вообще, без исключений —
+    # иначе «флор соседа 400» врут, когда на Tonnel та же модель за 10 TON.
+    if others:
+        cross = min(float(l["price_ton"]) for l in others)
+        if cross < ref:
+            ref = round(cross, 2)
+            src += " (гашено чужим флором)"
+    quality = "good" if len(api) >= MIN_SALES else ("ok" if sale_vals else "weak")
     return round(ref, 2), src, quality
 
 
@@ -824,7 +843,7 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
     if d.get("net_rub"):
         extra += f" · чистыми ~{d['net_rub']:,} ₽ после комиссий".replace(",", " ")
-    if d.get("fair_quality") == "weak":
+    if d.get("fair_quality") in ("weak", "ok"):
         extra += " · оценка грубая (мало сделок по модели)"
     return {
         "id": lot_id[:100],
