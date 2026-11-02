@@ -64,6 +64,8 @@ REFERRAL_BONUS_DAYS = 3
 MAX_REF_DAYS_PER_MONTH = 30
 MAX_TRIALS_PER_IP = 3
 LOT_TTL_HOURS = int(os.getenv("LOT_TTL_HOURS", "72"))
+# Подарки уходят за минуты-часы: вчерашние «выгоды» врут — отдельный короткий TTL
+GIFTS_TTL_HOURS = int(os.getenv("GIFTS_TTL_HOURS", "6"))
 ADVISORY_LOCK_ID = 94827165
 HEARTBEAT_SEC = 20
 
@@ -825,6 +827,9 @@ async def fetch_db_external_lots(
     async with pg_pool.acquire() as conn:
         await conn.execute(
             f"DELETE FROM dh_lots WHERE created_at < NOW() - INTERVAL '{LOT_TTL_HOURS} hours'"
+        )
+        await conn.execute(
+            f"DELETE FROM dh_lots WHERE source = 'GIFTS' AND created_at < NOW() - INTERVAL '{GIFTS_TTL_HOURS} hours'"
         )
         # гигиена TG: спрос-посты («купл/ищу/предложите») не лоты
         await conn.execute(

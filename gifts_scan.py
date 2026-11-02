@@ -74,8 +74,6 @@ MIN_NET_RUB = 500
 
 # Минимальное число РЕАЛЬНЫХ сделок (Sale-событий), чтобы считать медиану честной
 MIN_SALES = 5
-# Минимальное число ask-листингов модели, чтобы просить медиану листингов
-MIN_ASK_SAMPLES = 3
 # Сколько самых дешёвых лотов коллекции опрашиваем на историю сделок (Tonnel)
 ACTIVITY_SAMPLE = int(os.getenv("GIFT_ACT_SAMPLE", "6")) or 6
 # Сколько дней храним точки истории сделок и макс. точек на модель
@@ -571,41 +569,68 @@ def iqr_median(vals):
 # ---------------- Оценка ----------------
 # Честная планка модели (market_reference), по приоритету:
 #  1) медиана реальных сделок (Sale-события из history, IQR-фильтр) — «good»;
-#  2) медиана сделок+исчезнувших лотов, перекрёстно с медианой ask-листингов — «ok»;
-#  3) медиана ask-листингов модели по всем трём маркетам — «weak» (консервативно).
-# Итог всегда min(планка, медиана ask-листингов), если ask-данные есть —
-# обвал рынка листингов не даёт завысить оценку.
+#  2) медиана сделок+исчезнувших лотов (их купили/сняли по своей ask-цене) — «ok»;
+#  3) СОСЕДИ ТОЙ ЖЕ ПЛОЩАДКИ: флор других лотов той же модели там, где лот
+#     продаётся («перебей соседа здесь и сейчас», проверяется глазами) — «weak».
+# ЧУЖИЕ дорогие asks больше НЕ завышают планку: Tonnel может вешать 600 TON,
+# а на Portals floor той же модели 420 — медиана таких листингов рождает
+# фантомные «-30%». Итог всегда min(планка, самый дешёвый сосед любой площадки
+# того же лота): если текущие asks обвалились, устаревшая медиана сделок
+# не завысит оценку.
 # Выгодный лот: цена ≤ планка*(1-DEAL_PCT) И чистыми после комиссий ≥ MIN_NET_RUB.
-# 5) редкость модели/фона/символа < 2% — отдельная метка (на планку не влияет).
 
 RARE_PCT = 2.0             # порог редкости модели/фона/символа (%)
+# Минимум других лотов той же модели на той же площадке, чтобы верить их флору
+MIN_LOCAL_PEERS = 2
 
 
-def market_reference(gift: str, model: str, mlots: list, state: dict):
-    """(planca_ton | None, source_txt, quality) — качества: good/ok/weak."""
+def market_reference(gift: str, model: str, mlots: list, state: dict,
+                     exclude_lot=None):
+    """(planca_ton | None, source_txt, quality) — качества: good/ok/weak.
+
+    exclude_lot — оцениваемый лот: он не участвует в планке (иначе лот не может
+    быть дешевле собственной цены)."""
     key = f"{gift}|{model}".lower()
     pts = state.get("sales", {}).get(key, [])
     api = [p for ts, p, k in pts if k == "api"]
     gone = [p for ts, p, k in pts if k == "gone"]
-    asks = sorted(float(l["price_ton"]) for l in mlots if l.get("price_ton", 0) > 0)
-    ask_med = median_sample(asks) if len(asks) >= MIN_ASK_SAMPLES else 0.0
+
+    # соседи той же модели (без оцениваемого лота)
+    others = [l for l in mlots
+              if l is not exclude_lot
+              and l.get("price_ton", 0) > 0]
+    cross_floor = min(float(l["price_ton"]) for l in others) if others else 0.0
+
+    # флор с той же площадки, где продаётся сам лот (weak-планка)
+    local_peers = []
+    if exclude_lot is not None:
+        v = exclude_lot.get("venue")
+        local_peers = sorted(float(l["price_ton"]) for l in others
+                             if l.get("venue") == v)
+    elif mlots:
+        # без привязки к лоту (офлайн-проверка): берём все цены
+        local_peers = sorted(float(l["price_ton"]) for l in mlots)
+
     ref, src, quality = None, "", ""
     if len(api) >= MIN_SALES:
         ref = iqr_median(api)
         src = f"медиана сделок ({len(api)})"
         quality = "good"
     elif len(api) + len(gone) >= MIN_SALES:
-        m = iqr_median(api + gone)
-        ref = min(m, ask_med) if ask_med else m
+        ref = iqr_median(api + gone)
         src = f"сделки+исчезновения ({len(api)}+{len(gone)})"
         quality = "ok"
-    elif ask_med:
-        ref = ask_med
-        src = f"медиана листингов ({len(asks)})"
+    elif len(local_peers) >= MIN_LOCAL_PEERS:
+        ref = local_peers[0]
+        src = f"соседи {exclude_lot.get('venue') if exclude_lot else ''} ({len(local_peers)})"
         quality = "weak"
-    if ref and ask_med:
-        ref = min(ref, ask_med)
-    return ref, src, quality
+    if not ref:
+        return None, "", ""
+    # глобальный кэп: обвал сегодняшних asks гасит и медиану сделок
+    if cross_floor and cross_floor < ref:
+        ref = cross_floor
+        src += " (флор-сосед ниже)"
+    return round(ref, 2), src, quality
 
 
 def evaluate_lot(price_ton: float, reference_ton: float, rate: float,
@@ -651,20 +676,21 @@ def rare_reason(model: str, lot: dict, mlots: list):
     return ""
 
 
-def reject_reason(price_ton, reference_ton, fee_pct=None, min_discount=0.10):
+def reject_reason(price_ton, reference_ton, rate: float = 0.0, fee_pct=None, min_discount=float(DEAL_PCT) / 100.0):
     """Почему лот бракуется (для отладочного лога):
-    нет флора / цена >= флора / скидка < порога / профит <= 0."""
+    нет флора / цена >= флора / скидка < порога / профит мал."""
     if reference_ton is None or reference_ton <= 0:
-        return "нет флора"
+        return "нет планки (мало данных)"
     if price_ton is None or price_ton <= 0:
         return "нет цены"
     if price_ton >= reference_ton:
-        return "цена >= флора"
+        return "цена >= планки"
     if price_ton > reference_ton * (1.0 - min_discount) + 1e-9:
         return "скидка < порога"
-    net_sell = reference_ton * (1.0 - (RESELL_FEE_PCT if fee_pct is None else fee_pct) / 100.0)
-    if net_sell - price_ton <= 0:
-        return "профит <= 0"
+    net_profit_rub = (reference_ton * (1.0 - (RESELL_FEE_PCT if fee_pct is None else fee_pct) / 100.0)
+                      - price_ton) * (rate if rate > 0 else TON_RUB_FALLBACK)
+    if net_profit_rub < MIN_NET_RUB:
+        return "профит < %d₽" % MIN_NET_RUB
     return "?"
 
 
@@ -704,17 +730,24 @@ def find_with_model_deals(all_lots, rate: float, state=None):
             for l in mlots:
                 floors.setdefault(l["venue"], l["price_ton"])
             reference_ton, src, quality = market_reference(gift, model, mlots, state)
-            if not reference_ton:
-                reasons = state.get("sales", {}).get(f"{gift}|{model}".lower(), [])
-                diag['мало_данных' if not reasons else 'мало_сервисных_точек'] += 1
-                reject_cnt['нет данных о рынке'] += len(mlots)
-                diag['отброшено'] += len(mlots)
-                continue
+            ref_cache = (reference_ton, src, quality)
             for l in mlots:
                 rare = rare_reason(model, l, mlots)
+                if quality == "weak":
+                    # weak-планка зависит от оцениваемого лота (self-исключение)
+                    reference_ton, src, quality = market_reference(
+                        gift, model, mlots, state, exclude_lot=l)
+                else:
+                    reference_ton, src, quality = ref_cache
+                if not reference_ton:
+                    if REJECT_LOG:
+                        debug_reject_line(gift, model, l, 0, "мало данных (нет соседей/сделок)")
+                    reject_cnt['нет данных о рынке'] += 1
+                    diag['отброшено'] += 1
+                    continue
                 res = evaluate_lot(l["price_ton"], reference_ton, rate)
                 if not res:
-                    reason = reject_reason(l["price_ton"], reference_ton)
+                    reason = reject_reason(l["price_ton"], reference_ton, rate)
                     reject_cnt[reason] += 1
                     if REJECT_LOG:
                         debug_reject_line(gift, model, l, reference_ton, reason)
