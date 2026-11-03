@@ -66,6 +66,10 @@ MAX_TRIALS_PER_IP = 3
 LOT_TTL_HOURS = int(os.getenv("LOT_TTL_HOURS", "72"))
 # Подарки уходят за минуты-часы: вчерашние «выгоды» врут — отдельный короткий TTL
 GIFTS_TTL_HOURS = int(os.getenv("GIFTS_TTL_HOURS", "6"))
+# Комиссия перепродажи подарка на маркетплейсе (% от цены рынка) — той же
+# цифрой, что в gifts_scan.py (RESELL_FEE_PCT). Нужна для сортировки ленты
+# по ЧИСТОЙ выгоде (после вычета комиссии), а не по «сырому» market − price.
+GIFTS_FEE_PCT = float(os.getenv("GIFTS_FEE_PCT", "10"))
 ADVISORY_LOCK_ID = 94827165
 HEARTBEAT_SEC = 20
 
@@ -882,6 +886,12 @@ async def fetch_db_external_lots(
             "market": r["market"],
             "profitRub": r["profit_rub"],
             "profitPct": r["profit_pct"],
+            # у подарков «сырая» выгода market − price включает цену, которую
+            # ещё не оплатили маркетплейсу: сортируем по ЧИСТОЙ (netRub)
+            "netRub": (
+                int(round(float(r["profit_rub"]) - float(r["market"]) * GIFTS_FEE_PCT / 100.0))
+                if r["source"] == "GIFTS" else None
+            ),
             "tags": tags_list,
             "seller": {
                 "name": r["seller_name"],
@@ -929,7 +939,11 @@ async def build_honest_feed(
     elif sort_by == "date":
         combined.sort(key=lambda x: x.get("createdAtTs", 0), reverse=True)
     else:
-        combined.sort(key=lambda x: (x["profitRub"], x["profitPct"]), reverse=True)
+        # выгодой измеряем ЧИСТО: для подарков — после комиссии перепродажи
+        def _deal_key(x):
+            val = x["netRub"] if (x.get("source") == "GIFTS" and x.get("netRub") is not None) else x["profitRub"]
+            return (val, x["profitPct"])
+        combined.sort(key=_deal_key, reverse=True)
 
     return has_external_lots, combined
 

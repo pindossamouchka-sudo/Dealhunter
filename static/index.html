@@ -802,6 +802,7 @@
       letter-spacing: 0.08em; text-transform: uppercase;
       border: 1px solid currentColor; background: transparent;
     }
+    .src-rough { color: var(--amber); border-style: dashed; }
     .src-GIFTS { color: var(--amber); }
     .src-TG { color: var(--accent); }
 
@@ -3360,6 +3361,7 @@ function lotCategory(title, desc) {
       const viewed = getViewedIds().includes(item.id);
       const pct = Math.abs(Number(item.profitPct) || 0);
       const hasDiff = Number(item.profitRub) > 0;
+      const rough = item.source === 'GIFTS' && String(item.desc || '').includes('оценка грубая');
       const no = String(i + 1).padStart(2, '0');
       const tone = ['', 'is-pearl', '', '', 'is-pearl', ''][i % 6];
       const pctLabel = '−' + String(pct).replace('.', ',') + '%';
@@ -3372,6 +3374,7 @@ function lotCategory(title, desc) {
 
           <header class="cv-head">
             <span class="cv-issue t-num">${no}<i>/${String(total).padStart(2, '0')}</i></span>
+            ${rough ? '<span class="src-badge src-rough">грубая</span>' : ''}
             <span class="cv-src t-num">${esc(item.source)} · ${esc(item.city)} · ${esc(item.timeAgo)}</span>
             <button class="cv-save${isSaved ? ' is-saved' : ''}" aria-label="Сохранить лот" data-action="save-lot" data-val="${esc(item.id)}"><i data-lucide="heart" style="width:14px; height:14px;"></i></button>
           </header>
@@ -3429,6 +3432,7 @@ function lotCategory(title, desc) {
     function renderLotCard(item, i) {
       const isSaved = state.user.savedIds.includes(item.id);
       const hasDiff = Number(item.profitRub) > 0;
+      const rough = item.source === 'GIFTS' && String(item.desc || '').includes('оценка грубая');
       const viewed = getViewedIds().includes(item.id);
       const pct = Math.abs(Number(item.profitPct) || 0);
       const no = String((i || 0) + 1).padStart(2, '0');
@@ -3438,6 +3442,7 @@ function lotCategory(title, desc) {
             <div class="lot-head-left">
               <span class="lot-no">${no}</span>
               <span class="src-badge src-${esc(item.source)}">${esc(item.source)}</span>
+              ${rough ? '<span class="src-badge src-rough">грубая</span>' : ''}
               <span class="lot-meta">${esc(item.city)} · ${esc(item.timeAgo)}</span>
             </div>
             ${viewed ? '<span class="lot-viewed"><i data-lucide="eye" style="width:11px; height:11px;"></i>Смотрели</span>' : ''}
