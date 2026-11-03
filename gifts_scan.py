@@ -965,9 +965,11 @@ def to_lot_dict(d: dict, rate: float) -> dict:
     elif d["venue"] == "Tonnel":
         extra = " · покупка: кнопка «Забрать» открывает лот в боте Tonnel"
     if d.get("net_rub"):
-        extra += f" · чистыми ~{d['net_rub']:,} ₽ после комиссий".replace(",", " ")
+        extra += (f" · ориентировочно чистыми ~{d['net_rub']:,} ₽ после "
+                  f"комиссии площадки ~{RESELL_FEE_PCT:.0f}%").replace(",", " ")
     if d.get("fair_quality") in ("weak", "ok"):
         extra += " · оценка грубая (мало сделок по модели)"
+    estimate_date = datetime.utcnow().strftime("%d.%m.%Y %H:%M UTC")
     return {
         "id": lot_id[:100],
         "title": title[:200],
@@ -982,9 +984,10 @@ def to_lot_dict(d: dict, rate: float) -> dict:
         "description": (
             f"NFT-подарок Telegram · модель {d['model']} · фон {d['backdrop']} · "
             f"символ {d['symbol']} · №{d.get('gift_num') or '—'} · "
-            f"цена {d['price_ton']:.2f} TON, рыночная цена {d['fair_ton']:.2f} TON "
-            f"(источник: {d.get('fair_src') or 'листинги'}; Tonnel+Portals+Fragment)"
-            f" · скидка ~{pct}%{extra}"
+            f"цена {d['price_ton']:.2f} TON, ориентир по рынку ~{d['fair_ton']:.2f} TON "
+            f"(оценка DefHunt; источник: {d.get('fair_src') or 'медиана листингов'}; "
+            f"дата расчёта {estimate_date}; площадки Tonnel+Portals+Fragment) "
+            f"· скидка ~{pct}% (ориентировочно){extra}"
         )[:1000],
         "url": lot_url(d),
     }

@@ -477,6 +477,10 @@ async def upsert_user_atomic(
     candidate_ref_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     pool = require_db()
+    if deleted_recently(uid):
+        # профиль только что удалён пользователем: не воскрешаем его
+        # параллельным запросом со старой сессией
+        raise HTTPException(status_code=401, detail="Сессия недействительна: перезайди в мини-апп")
     async with pool.acquire() as conn:
         async with conn.transaction():
             valid_referrer = None
@@ -972,8 +976,25 @@ def in_quiet_hours() -> bool:
 async def monitor_scanner_loop():
     await asyncio.sleep(12)
     last_quiet_log = ""
+    last_privacy_cleanup = 0.0
     while True:
         try:
+            # 152-ФЗ (минимизация обработки): раз в сутки стираем то, что больше
+            # не нужно: IP-хэш нужен антифроду только 30 дней; брошенные профили
+            # (не платили, не брали триал, 180 дней о себе не напомнили) — удаляем.
+            if time.time() - last_privacy_cleanup > 86400 and pg_pool:
+                last_privacy_cleanup = time.time()
+                try:
+                    async with pg_pool.acquire() as c:
+                        n_ip = await c.execute(
+                            "UPDATE dh_users SET signup_ip_hash = '' "
+                            "WHERE signup_ip_hash != '' AND created_at < NOW() - INTERVAL '30 days'")
+                        n_gone = await c.execute(
+                            "DELETE FROM dh_users WHERE sub_until IS NULL AND trial_claimed = FALSE "
+                            "AND created_at < NOW() - INTERVAL '180 days'")
+                        logger.info(f"privacy-cleanup: ip_hash_stale={n_ip}, abandoned_profiles={n_gone}")
+                except Exception as e:
+                    logger.warning(f"privacy-cleanup не удался: {e}")
             if in_quiet_hours():
                 m = now_utc().strftime("%d-%m %H") [:9]
                 if m != last_quiet_log:
@@ -1458,21 +1479,71 @@ async def api_accept_terms(auth: Dict[str, Any] = Depends(get_authenticated_user
     return JSONResponse({"status": "ok"})
 
 
+# Надгробие недавно удалённых профилей: мгновенный antiresurrection-guard.
+# TTL 10 минут: чисто на конкуренцию запросов; после TTL пользователь может
+# осознанно вернуться через свежую вход-ссылку из бота (это новый профиль).
+DELETED_TOMBSTONE_TTL = 600
+DELETED_UIDS: Dict[int, float] = {}
+
+
+def deleted_recently(uid: int) -> bool:
+    exp = DELETED_UIDS.get(uid)
+    if exp is None:
+        return False
+    if exp < time.time():
+        DELETED_UIDS.pop(uid, None)
+        return False
+    return True
+
+
+async def delete_user_data(conn, uid: int) -> Dict[str, str]:
+    """Удаление всех строк пользователя. Принимает conn (asyncpg), поэтому
+    тестируется подменой conn (см. test_delete_me.py)."""
+    n_hits = await conn.fetchval(
+        "SELECT COUNT(*) FROM dh_monitor_hits h "
+        "JOIN dh_monitors m ON m.id = h.monitor_id WHERE m.user_id = $1", uid) or 0
+    n_mon = await conn.fetchval(
+        "SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid) or 0
+    n_pay = await conn.fetchval(
+        "SELECT COUNT(*) FROM dh_payments WHERE user_id = $1", uid) or 0
+    n_promo = await conn.fetchval(
+        "SELECT COUNT(*) FROM dh_promo_used WHERE user_id = $1", uid) or 0
+    await conn.execute(
+        "DELETE FROM dh_monitor_hits h USING dh_monitors m "
+        "WHERE h.monitor_id = m.id AND m.user_id = $1", uid)
+    await conn.execute("DELETE FROM dh_monitors WHERE user_id = $1", uid)
+    await conn.execute("DELETE FROM dh_payments WHERE user_id = $1", uid)
+    await conn.execute("DELETE FROM dh_promo_used WHERE user_id = $1", uid)
+    await conn.execute("DELETE FROM dh_users WHERE user_id = $1", uid)
+    return {
+        "monitorsDeleted": int(n_mon),
+        "monitorHitsDeleted": int(n_hits),
+        "paymentsDeleted": int(n_pay),
+        "promoDeleted": int(n_promo),
+        "profileDeleted": 1,
+    }
+
+
 @app.post("/api/delete-me")
 async def api_delete_me(data: DeleteMeReq, auth: Dict[str, Any] = Depends(get_authenticated_user)):
-    """Удаление всех данных пользователя: мониторы, настройки, подписка, сессия.
-    Финансовые записи (dh_payments) сохраняются для учёта сделок — они не содержат контактов."""
+    """Удаление ВСЕХ данных пользователя (152-ФЗ, право на удаление):
+    профиль, мониторы, история срабатываний, сохранённые/просмотренные лоты,
+    подписка, промо-активации, платежи, сессия. Финансовых контактов в
+    dh_payments нет (только сумма и grant дней), поэтому записи удаляются.
+    Возвращает счётчики фактически удалённых строк."""
     if not data.confirm:
         raise HTTPException(status_code=400, detail="Нужно подтверждение")
     uid = auth["uid"]
     pool = require_db()
-    n_mon = 0
     async with pool.acquire() as conn:
-        n_mon = await conn.fetchval("SELECT COUNT(*) FROM dh_monitors WHERE user_id = $1", uid) or 0
-        await conn.execute("DELETE FROM dh_monitors WHERE user_id = $1", uid)
-        await conn.execute("DELETE FROM dh_users WHERE user_id = $1", uid)
+        async with conn.transaction():
+            counts = await delete_user_data(conn, uid)
+    # убить все сессии пользователя (память процесса)
     fallback_sessions.drop_sessions_for_uid(uid)
-    return JSONResponse({"status": "ok", "monitorsDeleted": n_mon, "message": "Данные удалены"})
+    # надгробие: короткое окно, чтобы параллельный запрос с ещё живой
+    # сессией не воскресил профиль через upsert_user_atomic
+    DELETED_UIDS[uid] = time.time() + DELETED_TOMBSTONE_TTL
+    return JSONResponse({"status": "ok", "message": "Данные удалены", **counts})
 
 
 @app.post("/api/redeem-code")
