@@ -1256,8 +1256,11 @@ def debug_reject_run(n: int = 50):
         pass
     deals = find_with_model_deals(all_lots, rate, state)
     print(f"[debug] прошло фильтр: {len(deals)} из {sum(len(v) for v in all_lots.values())}")
-    for d in deals[:5]:
-        print("  [взят] %s | %s | %.2f TON | %s | +%.0f ₽" % (d["gift"], d["model"], d["price_ton"], d["fair_src"], d["net_rub"]))
+    for i, d in enumerate(deals[:10], 1):
+        # скидка уже в fair_src (-%% от источника)
+        print("  [взят #%d] %s | %s | цена %.2f TON | референс %.2f TON | %s | чистая прибыль +%.0f ₽ (комиссия перепродажи %.1f%%)" % (
+            i, d["gift"], d["model"], d["price_ton"], d["fair_ton"], d["fair_src"],
+            d["net_rub"], RESELL_FEE_PCT))
 
 
 if __name__ == "__main__":
