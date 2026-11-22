@@ -2795,6 +2795,8 @@ function lotCategory(title, desc) {
       theme: savedTheme,
       authError: null,
       serverError: false,
+      retrying: false,
+      retryTimer: null,
       tab: 'feed',
       category: 'all',
       source: 'all',
@@ -2934,7 +2936,21 @@ function lotCategory(title, desc) {
       return p;
     }
 
+    function stopAutoRetry() {
+      if (state.retryTimer) { clearTimeout(state.retryTimer); state.retryTimer = null; }
+    }
+
+    function scheduleAutoRetry() {
+      stopAutoRetry();
+      // Сервер может ожить сам (например, починится БД) — проверяем каждые 20 сек,
+      // чтобы пользователю не приходилось тыкать «Повторить» вручную.
+      state.retryTimer = setTimeout(() => { state.retryTimer = null; syncState(); }, 20000);
+    }
+
     async function syncState() {
+      if (state.retrying) return;   // не плодим запросы при частых нажатиях
+      state.retrying = true;
+      let needRender = false;
       try {
         const res = await fetch('/api/state', { headers: authHeaders() });
         if (!res.ok) {
@@ -2942,24 +2958,31 @@ function lotCategory(title, desc) {
             // Сервер жив, но БД недоступна (квота Neon и т.п.). Это НЕ «открыть в Telegram».
             state.serverError = true;
             state.authError = 'Сервис временно недоступен: база данных на перезапуске. Попробуйте через минуту.';
+            scheduleAutoRetry();
           } else {
             state.serverError = false;
+            stopAutoRetry();
             const err = await res.json().catch(() => ({}));
             state.authError = err.detail || 'Запустите приложение через Telegram-бота';
           }
-          render();
+          needRender = true;
           return;
         }
         const data = await res.json();
         state.authError = null;
         state.serverError = false;
+        stopAutoRetry();
         state.user = data.user;
         state.monitors = data.monitors || [];
         await loadFeed(false);
       } catch (e) {
         state.serverError = true;
         state.authError = 'Нет соединения с сервером. Проверьте интернет и попробуйте ещё раз.';
-        render();
+        scheduleAutoRetry();
+        needRender = true;
+      } finally {
+        state.retrying = false;
+        if (needRender) render();   // рисуем после сброса retrying: кнопка не залипает
       }
     }
 
@@ -3222,7 +3245,11 @@ function lotCategory(title, desc) {
       }
       else if (action === 'set-theme') { setThemeAction(val); }
       else if (action === 'refresh') { loadFeed(true); }
-      else if (action === 'retry-boot') { state.authError = null; state.serverError = false; render(); syncState(); }
+      else if (action === 'retry-boot') {
+        // Не сбрасываем authError до успешного ответа: иначе интерфейс
+        // на секунду «проглядывает» и снова падает в ошибку.
+        syncState();
+      }
       else if (action === 'open-filters') { state.filtersOpen = true; render(); }
       else if (action === 'close-filters') {
         if (el.classList.contains('modal-backdrop') && e.target.closest('.modal-sheet')) return;
@@ -3588,8 +3615,11 @@ function lotCategory(title, desc) {
                   <i data-lucide="server-crash" style="width:28px; height:28px;"></i>
                 </div>
                 <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Сервис временно недоступен</h2>
-                <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">${esc(state.authError)}</p>
-                <button class="btn btn-large btn-accent" data-action="retry-boot">Повторить</button>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:6px;">${esc(state.authError)}</p>
+                <p style="font-size:12px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">
+                  Мы сами перепроверяем сервер каждые 20 секунд — можно просто подождать.
+                </p>
+                <button class="btn btn-large btn-accent" data-action="retry-boot"${state.retrying ? ' disabled' : ''}>${state.retrying ? 'Проверяем…' : 'Повторить'}</button>
               </div>
             </div>
           `;
