@@ -127,9 +127,9 @@ async def db_unavailable_handler(request: Request, exc: asyncpg.PostgresError):
     )
 
 
-@app.exception_handler((asyncio.TimeoutError, OSError))
-async def db_connection_error_handler(request: Request, exc: Exception):
-    logger.error(f"Соединение с БД недоступно в {request.url.path}: {type(exc).__name__}: {exc}")
+@app.exception_handler(asyncio.TimeoutError)
+async def db_timeout_handler(request: Request, exc: asyncio.TimeoutError):
+    logger.error(f"Таймаут БД в {request.url.path}: {type(exc).__name__}: {exc}")
     return JSONResponse(
         status_code=503,
         content={"detail": "База данных временно недоступна. Попробуйте через минуту."},
@@ -1463,6 +1463,8 @@ async def health():
             db_ok = True
         except Exception as e:
             db_error = f"{type(e).__name__}: {str(e)[:160]}"
+    else:
+        db_error = "pool not created: asyncpg.create_pool failed (check DATABASE_URL/quota)"
     return {
         "status": "ok" if db_ok else "degraded",
         "bot": BOT_USERNAME_CACHE,
