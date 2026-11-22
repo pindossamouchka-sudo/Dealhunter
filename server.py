@@ -148,6 +148,8 @@ dp = Dispatcher()
 pg_pool: Optional[asyncpg.Pool] = None
 background_leader_conn: Optional[asyncpg.Connection] = None
 leader_task: Optional[asyncio.Task] = None
+# Резервный polling бота (когда БД недоступна и лидерскую сессию взять нельзя).
+fallback_polling_task: Optional[asyncio.Task] = None
 # True, пока бот реально забирает апдейты (long polling). Для /health-диагностики.
 BOT_POLLING = False
 
@@ -1400,6 +1402,36 @@ async def run_leader_session():
         scanner_task.cancel()
 
 
+async def bot_polling_fallback_loop():
+    """Резервный polling бота на случай, когда лидерскую сессию взять нельзя
+    (БД недоступна: квота Neon, обрыв соединения).
+
+    Без этого бот молчит на /start, и пользователь не понимает, что происходит.
+    Лидерский polling (нормальный режим) при этом не запускается, поэтому
+    двойного getUpdates с лидером не будет. Конфликт 409 (два инстанса)
+    переживаем перезапуском цикла."""
+    global BOT_POLLING
+    while True:
+        try:
+            if not bot:
+                await asyncio.sleep(10)
+                continue
+            me = await bot.get_me()
+            if me and me.username:
+                BOT_USERNAME_CACHE = me.username
+            await bot.delete_webhook(drop_pending_updates=False)
+            BOT_POLLING = True
+            await dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+            BOT_POLLING = False
+        except asyncio.CancelledError:
+            BOT_POLLING = False
+            raise
+        except Exception as e:
+            BOT_POLLING = False
+            logger.warning(f"Резервный polling бота упал: {type(e).__name__}: {e}")
+            await asyncio.sleep(5)
+
+
 async def single_leader_background_manager():
     global background_leader_conn
     await asyncio.sleep(2)
@@ -1424,16 +1456,22 @@ async def single_leader_background_manager():
 
 @app.on_event("startup")
 async def on_startup():
-    global leader_task
+    global leader_task, fallback_polling_task
     await init_db()
     leader_task = asyncio.create_task(single_leader_background_manager())
+    if pg_pool is None:
+        # БД недоступна — лидерскую сессию не взять, но бот должен отвечать.
+        logger.warning("БД недоступна на старте: запускаю резервный polling бота.")
+        fallback_polling_task = asyncio.create_task(bot_polling_fallback_loop())
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    global leader_task, background_leader_conn, pg_pool
+    global leader_task, fallback_polling_task, background_leader_conn, pg_pool
     if leader_task:
         leader_task.cancel()
+    if fallback_polling_task:
+        fallback_polling_task.cancel()
     if background_leader_conn and pg_pool:
         await _drop_leader_conn()
     if bot:
