@@ -114,6 +114,27 @@ ACCESSORY_STOP_WORDS = (
 
 app = FastAPI(title="DealHunter Stable API")
 
+
+@app.exception_handler(asyncpg.PostgresError)
+async def db_unavailable_handler(request: Request, exc: asyncpg.PostgresError):
+    """БД недоступна (квота Neon, обрыв соединения) -> 503 с понятным текстом,
+    а не 500 Internal Server Error: клиент покажет 'сервер недоступен',
+    а не 'открыть в Telegram'."""
+    logger.error(f"Ошибка БД в {request.url.path}: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "База данных временно недоступна. Попробуйте через минуту."},
+    )
+
+
+@app.exception_handler((asyncio.TimeoutError, OSError))
+async def db_connection_error_handler(request: Request, exc: Exception):
+    logger.error(f"Соединение с БД недоступно в {request.url.path}: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "База данных временно недоступна. Попробуйте через минуту."},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[WEBAPP_URL, "https://web.telegram.org", "https://t.me"],
@@ -127,6 +148,8 @@ dp = Dispatcher()
 pg_pool: Optional[asyncpg.Pool] = None
 background_leader_conn: Optional[asyncpg.Connection] = None
 leader_task: Optional[asyncio.Task] = None
+# True, пока бот реально забирает апдейты (long polling). Для /health-диагностики.
+BOT_POLLING = False
 
 # =====================================================================
 # 2. КЭШИРОВАНИЕ И ЛИМИТЫ
@@ -1143,8 +1166,15 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
         if r_str.isdigit() and int(r_str) != uid:
             candidate_ref = int(r_str)
 
+    db_ok = True
     if pg_pool:
-        await upsert_user_atomic(uid, fname, uname, candidate_ref_id=candidate_ref)
+        try:
+            await upsert_user_atomic(uid, fname, uname, candidate_ref_id=candidate_ref)
+        except Exception as e:
+            # БД недоступна (лимит/квота Neon, обрыв соединения) — не молчим,
+            # а честно сообщаем: иначе пользователь видит «бот не отвечает».
+            db_ok = False
+            logger.warning(f"Не удалось сохранить профиль {uid}: {type(e).__name__}: {e}")
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1152,6 +1182,15 @@ async def cmd_start(message: types.Message, command: Optional[CommandObject] = N
             [InlineKeyboardButton(text="⭐️ Купить Stars выгодно (BunnyStars)", url=BUNNY_STARS_URL)],
         ]
     )
+    if not db_ok:
+        await message.answer(
+            "⚠️ <b>DealHunter PRO</b>\n\n"
+            "Сервис сейчас недоступен: база данных на перезапуске, ваш профиль не создан. "
+            "Попробуйте <b>/start</b> ещё раз через минуту — данные не потеряются.\n\n"
+            "Если так продолжается дольше 10 минут — напишите в поддержку.",
+            parse_mode="HTML",
+        )
+        return
     await message.answer(
         f"👋 <b>Привет, {fname}!</b>\n\n"
         "<b>DealHunter PRO</b> — радар скидок и честного сравнения цен на <b>Wildberries, Ozon и подарках Telegram</b>.\n\n"
@@ -1304,7 +1343,7 @@ async def run_leader_session():
     Возвращает False, если лок занят другим инстансом. Возвращается также при
     потере связи с БД — тогда соединение сброшено и вызывающий попробует снова.
     """
-    global BOT_USERNAME_CACHE, background_leader_conn
+    global BOT_USERNAME_CACHE, background_leader_conn, BOT_POLLING
 
     conn = await pg_pool.acquire()
     background_leader_conn = conn
@@ -1327,6 +1366,7 @@ async def run_leader_session():
             polling = asyncio.create_task(
                 dp.start_polling(bot, handle_signals=False, close_bot_session=False)
             )
+            BOT_POLLING = True
 
         async def heartbeat_loop():
             while True:
@@ -1353,6 +1393,7 @@ async def run_leader_session():
             await _drop_leader_conn()
             return
     finally:
+        BOT_POLLING = False
         for t in (hb_task, polling):
             if t is not None and not t.done():
                 t.cancel()
@@ -1413,7 +1454,22 @@ async def on_shutdown():
 @app.get("/health")
 @app.head("/")
 async def health():
-    return {"status": "ok", "bot": BOT_USERNAME_CACHE, "db_connected": bool(pg_pool)}
+    db_ok = False
+    db_error = ""
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as c:
+                await asyncio.wait_for(c.fetchval("SELECT 1"), 5)
+            db_ok = True
+        except Exception as e:
+            db_error = f"{type(e).__name__}: {str(e)[:160]}"
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "bot": BOT_USERNAME_CACHE,
+        "db_connected": db_ok,
+        "db_error": db_error,
+        "bot_polling": BOT_POLLING,
+    }
 
 
 @app.get("/api/state")

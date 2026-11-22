@@ -2794,6 +2794,7 @@ function lotCategory(title, desc) {
     const state = {
       theme: savedTheme,
       authError: null,
+      serverError: false,
       tab: 'feed',
       category: 'all',
       source: 'all',
@@ -2937,18 +2938,27 @@ function lotCategory(title, desc) {
       try {
         const res = await fetch('/api/state', { headers: authHeaders() });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          state.authError = err.detail || 'Запустите приложение через Telegram-бота';
+          if (res.status >= 500) {
+            // Сервер жив, но БД недоступна (квота Neon и т.п.). Это НЕ «открыть в Telegram».
+            state.serverError = true;
+            state.authError = 'Сервис временно недоступен: база данных на перезапуске. Попробуйте через минуту.';
+          } else {
+            state.serverError = false;
+            const err = await res.json().catch(() => ({}));
+            state.authError = err.detail || 'Запустите приложение через Telegram-бота';
+          }
           render();
           return;
         }
         const data = await res.json();
         state.authError = null;
+        state.serverError = false;
         state.user = data.user;
         state.monitors = data.monitors || [];
         await loadFeed(false);
       } catch (e) {
-        state.authError = 'Нет соединения с сервером';
+        state.serverError = true;
+        state.authError = 'Нет соединения с сервером. Проверьте интернет и попробуйте ещё раз.';
         render();
       }
     }
@@ -3212,6 +3222,7 @@ function lotCategory(title, desc) {
       }
       else if (action === 'set-theme') { setThemeAction(val); }
       else if (action === 'refresh') { loadFeed(true); }
+      else if (action === 'retry-boot') { state.authError = null; state.serverError = false; render(); syncState(); }
       else if (action === 'open-filters') { state.filtersOpen = true; render(); }
       else if (action === 'close-filters') {
         if (el.classList.contains('modal-backdrop') && e.target.closest('.modal-sheet')) return;
@@ -3567,6 +3578,25 @@ function lotCategory(title, desc) {
       }
 
       if (state.authError) {
+        if (state.serverError) {
+          // Серверная ошибка (например, недоступна БД) — Telegram тут ни при чём,
+          // поэтому не просим «открыть в Telegram», а предлагаем повторить.
+          app.innerHTML = `
+            <div class="screen-content${animate ? ' stagger' : ''}" style="padding-top:44px;">
+              <div class="glass-card" style="text-align:center; padding:28px 18px;">
+                <div style="width:56px; height:56px; border-radius:18px; background:var(--accent-soft); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; margin:0 auto 14px;">
+                  <i data-lucide="server-crash" style="width:28px; height:28px;"></i>
+                </div>
+                <h2 style="font-size:18px; font-weight:800; margin-bottom:8px;">Сервис временно недоступен</h2>
+                <p style="font-size:13px; color:var(--text-secondary); line-height:1.5; margin-bottom:18px;">${esc(state.authError)}</p>
+                <button class="btn btn-large btn-accent" data-action="retry-boot">Повторить</button>
+              </div>
+            </div>
+          `;
+          setDockSpace(false);
+          if (window.lucide) lucide.createIcons();
+          return;
+        }
         app.innerHTML = `
           <div class="screen-content${animate ? ' stagger' : ''}" style="padding-top:44px;">
             <div class="glass-card" style="text-align:center; padding:28px 18px;">
