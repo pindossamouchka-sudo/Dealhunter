@@ -152,6 +152,8 @@ leader_task: Optional[asyncio.Task] = None
 fallback_polling_task: Optional[asyncio.Task] = None
 # True, пока бот реально забирает апдейты (long polling). Для /health-диагностики.
 BOT_POLLING = False
+# True, пока активна лидерская сессия (она держит основной polling).
+LEADER_ACTIVE = False
 
 # =====================================================================
 # 2. КЭШИРОВАНИЕ И ЛИМИТЫ
@@ -1345,7 +1347,7 @@ async def run_leader_session():
     Возвращает False, если лок занят другим инстансом. Возвращается также при
     потере связи с БД — тогда соединение сброшено и вызывающий попробует снова.
     """
-    global BOT_USERNAME_CACHE, background_leader_conn, BOT_POLLING
+    global BOT_USERNAME_CACHE, background_leader_conn, BOT_POLLING, LEADER_ACTIVE
 
     conn = await pg_pool.acquire()
     background_leader_conn = conn
@@ -1354,6 +1356,14 @@ async def run_leader_session():
     if not locked:
         await _drop_leader_conn()
         return False
+
+    LEADER_ACTIVE = True
+    # Лидер забирает polling себе: резервный polling надо остановить,
+    # иначе Telegram вернёт 409 (два getUpdates на одном токене).
+    if fallback_polling_task and not fallback_polling_task.done():
+        logger.info("Останавливаю резервный polling: лидер взял на себя обмен с Telegram.")
+        fallback_polling_task.cancel()
+        await asyncio.sleep(2)
 
     logger.info("Лидер получен: запуск бота и сканера.")
     scanner_task = asyncio.create_task(monitor_scanner_loop())
@@ -1396,6 +1406,7 @@ async def run_leader_session():
             return
     finally:
         BOT_POLLING = False
+        LEADER_ACTIVE = False
         for t in (hb_task, polling):
             if t is not None and not t.done():
                 t.cancel()
@@ -1411,10 +1422,16 @@ async def bot_polling_fallback_loop():
     двойного getUpdates с лидером не будет. Конфликт 409 (два инстанса)
     переживаем перезапуском цикла."""
     global BOT_POLLING
+    # Даём лидеру time-to-lead: он обычно берёт лок за несколько секунд.
+    await asyncio.sleep(15)
     while True:
         try:
             if not bot:
                 await asyncio.sleep(10)
+                continue
+            if LEADER_ACTIVE:
+                # Лидер сам общается с Telegram - не мешаем (иначе 409).
+                await asyncio.sleep(5)
                 continue
             me = await bot.get_me()
             if me and me.username:
@@ -1438,7 +1455,13 @@ async def single_leader_background_manager():
     while True:
         try:
             if not pg_pool:
-                await asyncio.sleep(5)
+                # БД была недоступна на старте (квота Neon) - пробуем поднять пул заново.
+                # Тогда после починки Neon приложение оживает БЕЗ рестарта на Render.
+                try:
+                    await init_db()
+                except Exception as e:
+                    logger.warning(f"Не удалось пересоздать пул БД: {type(e).__name__}: {e}")
+                await asyncio.sleep(20)
                 continue
             if background_leader_conn is not None and background_leader_conn.is_closed():
                 background_leader_conn = None
@@ -1459,10 +1482,9 @@ async def on_startup():
     global leader_task, fallback_polling_task
     await init_db()
     leader_task = asyncio.create_task(single_leader_background_manager())
-    if pg_pool is None:
-        # БД недоступна — лидерскую сессию не взять, но бот должен отвечать.
-        logger.warning("БД недоступна на старте: запускаю резервный polling бота.")
-        fallback_polling_task = asyncio.create_task(bot_polling_fallback_loop())
+    # Резервный polling создаём всегда: он включится, если лидер не может
+    # работать (БД недоступна) или лидерская сессия отвалилась.
+    fallback_polling_task = asyncio.create_task(bot_polling_fallback_loop())
 
 
 @app.on_event("shutdown")
@@ -1509,6 +1531,7 @@ async def health():
         "db_connected": db_ok,
         "db_error": db_error,
         "bot_polling": BOT_POLLING,
+        "leader": LEADER_ACTIVE,
     }
 
 
