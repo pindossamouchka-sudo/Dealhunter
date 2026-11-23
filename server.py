@@ -135,6 +135,17 @@ async def db_timeout_handler(request: Request, exc: asyncio.TimeoutError):
         content={"detail": "База данных временно недоступна. Попробуйте через минуту."},
     )
 
+
+@app.exception_handler(asyncpg.InterfaceError)
+async def db_pool_closed_handler(request: Request, exc: asyncpg.InterfaceError):
+    """Пул БД был пересоздан/закрыт прямо во время запроса -> это тоже 503,
+    а не 500 Internal Server Error."""
+    logger.error(f"Пул БД недоступен в {request.url.path}: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "База данных временно недоступна. Попробуйте через минуту."},
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[WEBAPP_URL, "https://web.telegram.org", "https://t.me"],
@@ -154,6 +165,8 @@ fallback_polling_task: Optional[asyncio.Task] = None
 BOT_POLLING = False
 # True, пока активна лидерская сессия (она держит основной polling).
 LEADER_ACTIVE = False
+# True, если связь с БД была потеряна и пул требуется пересоздать.
+DB_BROKEN = False
 
 # =====================================================================
 # 2. КЭШИРОВАНИЕ И ЛИМИТЫ
@@ -387,19 +400,25 @@ def now_utc() -> datetime:
 
 
 def require_db() -> asyncpg.Pool:
-    if not pg_pool:
+    if not pg_pool or DB_BROKEN:
         raise HTTPException(status_code=503, detail="База данных PostgreSQL не подключена (DATABASE_URL)")
     return pg_pool
 
 
 async def init_db():
-    global pg_pool
+    global pg_pool, DB_BROKEN
     if not DATABASE_URL.startswith("postgres"):
         logger.error("КРИТИЧНО: DATABASE_URL не задан или не начинается с postgres!")
+        DB_BROKEN = True
         return
+    # Новый пул создаём ПЕРЕД подменой pg_pool: старый (сломанный) остаётся
+    # доступным до конца пересоздания, поэтому запросы в полёте не падают
+    # с AttributeError, а получают честный 503 (DB_BROKEN).
+    old_pool = pg_pool
+    new_pool = None
     try:
-        pg_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=8, command_timeout=15)
-        async with pg_pool.acquire() as conn:
+        new_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=8, command_timeout=15)
+        async with new_pool.acquire() as conn:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS dh_users (
                     user_id BIGINT PRIMARY KEY,
@@ -492,9 +511,22 @@ async def init_db():
             await conn.execute("ALTER TABLE dh_users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ DEFAULT NULL;")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_ip_hash ON dh_users (signup_ip_hash);")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_dh_users_referred_by ON dh_users (referred_by);")
+        pg_pool = new_pool
         logger.info("PostgreSQL инициализирован.")
+        DB_BROKEN = False
+        if old_pool is not None and old_pool is not new_pool:
+            try:
+                await old_pool.close()
+            except Exception:
+                pass
     except Exception as e:
+        DB_BROKEN = True
         logger.exception(f"Ошибка инициализации PostgreSQL: {e}")
+        if new_pool is not None:
+            try:
+                await new_pool.close()
+            except Exception:
+                pass
 
 
 async def upsert_user_atomic(
@@ -1347,7 +1379,7 @@ async def run_leader_session():
     Возвращает False, если лок занят другим инстансом. Возвращается также при
     потере связи с БД — тогда соединение сброшено и вызывающий попробует снова.
     """
-    global BOT_USERNAME_CACHE, background_leader_conn, BOT_POLLING, LEADER_ACTIVE
+    global BOT_USERNAME_CACHE, background_leader_conn, BOT_POLLING, LEADER_ACTIVE, DB_BROKEN
 
     conn = await pg_pool.acquire()
     background_leader_conn = conn
@@ -1363,7 +1395,10 @@ async def run_leader_session():
     if fallback_polling_task and not fallback_polling_task.done():
         logger.info("Останавливаю резервный polling: лидер взял на себя обмен с Telegram.")
         fallback_polling_task.cancel()
-        await asyncio.sleep(2)
+        # Ждём полной остановки: пока резервный polling не вышел из
+        # dp.start_polling, внутренний lock aiogram занят и следующий
+        # start_polling (лидерский) может зависнуть или дать 409.
+        await asyncio.gather(fallback_polling_task, return_exceptions=True)
 
     logger.info("Лидер получен: запуск бота и сканера.")
     scanner_task = asyncio.create_task(monitor_scanner_loop())
@@ -1403,6 +1438,7 @@ async def run_leader_session():
             if polling is not None:
                 polling.cancel()
             await _drop_leader_conn()
+            DB_BROKEN = True   # пул надо пересоздать, а API - отдавать 503
             return
     finally:
         BOT_POLLING = False
@@ -1418,9 +1454,13 @@ async def bot_polling_fallback_loop():
     (БД недоступна: квота Neon, обрыв соединения).
 
     Без этого бот молчит на /start, и пользователь не понимает, что происходит.
-    Лидерский polling (нормальный режим) при этом не запускается, поэтому
-    двойного getUpdates с лидером не будет. Конфликт 409 (два инстанса)
-    переживаем перезапуском цикла."""
+
+    Правило (важно для 409): резервный polling работает ТОЛЬКО пока БД недоступна
+    (pg_pool is None или DB_BROKEN). Если БД доступна, обмен с Telegram ведёт
+    либо этот инстанс (он взял advisory-лок = лидер), либо другой инстанс Render.
+    Второй getUpdates на тот же токен даёт 409 и рвёт чужой polling, поэтому
+    при живой БД резервный polling молчит.
+    """
     global BOT_POLLING
     # Даём лидеру time-to-lead: он обычно берёт лок за несколько секунд.
     await asyncio.sleep(15)
@@ -1429,8 +1469,8 @@ async def bot_polling_fallback_loop():
             if not bot:
                 await asyncio.sleep(10)
                 continue
-            if LEADER_ACTIVE:
-                # Лидер сам общается с Telegram - не мешаем (иначе 409).
+            if pg_pool is not None and not DB_BROKEN:
+                # БД жива: лидер (этот или другой инстанс) ведёт обмен с Telegram.
                 await asyncio.sleep(5)
                 continue
             me = await bot.get_me()
@@ -1450,17 +1490,22 @@ async def bot_polling_fallback_loop():
 
 
 async def single_leader_background_manager():
-    global background_leader_conn
+    global background_leader_conn, fallback_polling_task, DB_BROKEN
     await asyncio.sleep(2)
     while True:
         try:
-            if not pg_pool:
-                # БД была недоступна на старте (квота Neon) - пробуем поднять пул заново.
+            if not pg_pool or DB_BROKEN:
+                # БД была недоступна на старте (квота Neon) или связь с ней
+                # потерялась - пробуем поднять пул заново.
                 # Тогда после починки Neon приложение оживает БЕЗ рестарта на Render.
                 try:
                     await init_db()
                 except Exception as e:
                     logger.warning(f"Не удалось пересоздать пул БД: {type(e).__name__}: {e}")
+                # Пока БД недоступна - бот должен отвечать: держим резервный polling
+                # живым (он мог быть остановлен, когда этот инстанс был лидером).
+                if fallback_polling_task is None or fallback_polling_task.done():
+                    fallback_polling_task = asyncio.create_task(bot_polling_fallback_loop())
                 await asyncio.sleep(20)
                 continue
             if background_leader_conn is not None and background_leader_conn.is_closed():
@@ -1472,6 +1517,7 @@ async def single_leader_background_manager():
         except asyncio.CancelledError:
             break
         except Exception as e:
+            DB_BROKEN = True
             logger.warning(f"Рестарт фонового воркера: {e}")
             await _drop_leader_conn()
             await asyncio.sleep(5)
@@ -1516,13 +1562,15 @@ async def on_shutdown():
 async def health():
     db_ok = False
     db_error = ""
-    if pg_pool:
+    if pg_pool and not DB_BROKEN:
         try:
             async with pg_pool.acquire() as c:
                 await asyncio.wait_for(c.fetchval("SELECT 1"), 5)
             db_ok = True
         except Exception as e:
             db_error = f"{type(e).__name__}: {str(e)[:160]}"
+    elif DB_BROKEN:
+        db_error = "db connection lost: pool will be recreated (check DATABASE_URL/quota/network)"
     else:
         db_error = "pool not created: asyncpg.create_pool failed (check DATABASE_URL/quota)"
     return {
