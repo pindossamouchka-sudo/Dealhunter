@@ -71,7 +71,18 @@ GIFTS_TTL_HOURS = int(os.getenv("GIFTS_TTL_HOURS", "6"))
 # по ЧИСТОЙ выгоде (после вычета комиссии), а не по «сырому» market − price.
 GIFTS_FEE_PCT = float(os.getenv("GIFTS_FEE_PCT", "10"))
 ADVISORY_LOCK_ID = 94827165
-HEARTBEAT_SEC = 20
+# Heartbeat лидерской сессии. Держим НЕ чаще раза в 10 минут: на бесплатном
+# плане Neon (100 CU-hours/project/month) любое обращение к БД будит compute,
+# а compute засыпает только после 5 минут без запросов. Частый heartbeat
+# (=always-on) выжигал всю квоту примерно за 17 дней. Обнаружение обрыва БД
+# теперь делает и сам сканер (его запросы падают) - не хуже, чем heartbeat.
+HEARTBEAT_SEC = int(os.getenv("HEARTBEAT_SEC", "600"))
+# Пауза сканера, когда активных PRO-мониторов нет: реже ходим в БД,
+# чтобы compute Neon успевал уснуть (scale-to-zero через 5 минут).
+SCANNER_IDLE_SLEEP = int(os.getenv("SCANNER_IDLE_SLEEP", "600"))
+# Переподключение к БД при недоступности: 20с -> 1мин -> 3мин -> 5мин (потолок).
+# Частые попытки connect так же будили compute и съедали квоту.
+RECONNECT_BACKOFF = (20, 60, 180, 300)
 
 QUIET_START = int(os.getenv("QUIET_START", "23")) % 24
 QUIET_END = int(os.getenv("QUIET_END", "9")) % 24
@@ -1086,7 +1097,9 @@ async def monitor_scanner_loop():
                 """)
 
             if not rows:
-                await asyncio.sleep(60)
+                # нет активных PRO-мониторов -> ходим в БД реже (см. SCANNER_IDLE_SLEEP),
+                # чтобы compute Neon успевал уснуть и не выжигал бесплатные CU-часы
+                await asyncio.sleep(SCANNER_IDLE_SLEEP)
                 continue
 
             grouped: Dict[Tuple[str, str, str], List[asyncpg.Record]] = {}
@@ -1492,6 +1505,7 @@ async def bot_polling_fallback_loop():
 async def single_leader_background_manager():
     global background_leader_conn, fallback_polling_task, DB_BROKEN
     await asyncio.sleep(2)
+    backoff_idx = 0
     while True:
         try:
             if not pg_pool or DB_BROKEN:
@@ -1506,7 +1520,16 @@ async def single_leader_background_manager():
                 # живым (он мог быть остановлен, когда этот инстанс был лидером).
                 if fallback_polling_task is None or fallback_polling_task.done():
                     fallback_polling_task = asyncio.create_task(bot_polling_fallback_loop())
-                await asyncio.sleep(20)
+                if DB_BROKEN:
+                    # БД не поднялась: следующая попытка позже (backoff).
+                    delay = RECONNECT_BACKOFF[min(backoff_idx, len(RECONNECT_BACKOFF) - 1)]
+                    backoff_idx = min(backoff_idx + 1, len(RECONNECT_BACKOFF) - 1)
+                else:
+                    # Пул поднялся - сбрасываем backoff.
+                    delay = RECONNECT_BACKOFF[0]
+                    backoff_idx = 0
+                logger.info(f"Переподключение к БД: следующая попытка через {delay} сек")
+                await asyncio.sleep(delay)
                 continue
             if background_leader_conn is not None and background_leader_conn.is_closed():
                 background_leader_conn = None
